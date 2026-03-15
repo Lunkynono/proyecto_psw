@@ -17,6 +17,7 @@ Plataforma web de votaciones para hackathons, ferias de innovación y competicio
 9. [Roles y flujos de navegación](#9-roles-y-flujos-de-navegación)
 10. [Decisiones de diseño importantes](#10-decisiones-de-diseño-importantes)
 11. [Notas para desarrolladores](#11-notas-para-desarrolladores)
+12. [Contribución](#12-contribución)
 
 ---
 
@@ -721,3 +722,54 @@ El proyecto incluye un archivo `vercel.json` configurado para despliegues en [Ve
 ---
 
 *Proyecto desarrollado como parte de una asignatura de Proceso de Software.*
+
+---
+
+## 12. Contribución
+
+Para contribuir al proyecto y subir cambios al repositorio en GitHub, sigue estos pasos:
+
+### Configuración inicial de Git y autenticación
+
+1. **Clona el repositorio** (si no lo tienes localmente):
+   ```bash
+   git clone https://github.com/Lunkynono/proyecto_psw.git
+   cd proyecto_psw
+   ```
+
+2. **Crea un Personal Access Token (PAT) en GitHub**:
+   - Ve a [https://github.com/settings/tokens](https://github.com/settings/tokens).
+   - Crea un nuevo token **clásico** con el scope `repo` (acceso completo a repositorios privados).
+   - Copia el token (empieza con `ghp_`).
+
+3. **Configura Git para almacenar credenciales**:
+   ```bash
+   git config --global credential.helper store
+   ```
+
+### Subir cambios
+
+1. **Haz tus cambios** en el código.
+
+2. **Añade los archivos modificados**:
+   ```bash
+   git add .
+   ```
+
+3. **Crea un commit** con un mensaje descriptivo:
+   ```bash
+   git commit -m "Descripción de los cambios realizados"
+   ```
+
+4. **Sube los cambios al repositorio**:
+   ```bash
+   git push origin main
+   ```
+   - Si es la primera vez, Git te pedirá tu nombre de usuario de GitHub y el PAT como contraseña. Ingresa tu username y el token.
+
+### Notas importantes
+
+- El repositorio es privado, por lo que necesitas un PAT con permisos adecuados.
+- Nunca subas el archivo `.env` ni tokens al repositorio (están en `.gitignore`).
+- Si encuentras conflictos al hacer push, haz `git pull origin main` primero para sincronizar.
+- Para seguridad, revoca tokens antiguos en GitHub settings después de usarlos.
