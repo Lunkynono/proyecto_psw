@@ -193,51 +193,79 @@ export default function CompeticionDetalle() {
   // Añade un juez a la competición por su correo electrónico
   // Validaciones: usuario debe existir en 'persona' y no puede ser el organizador del evento
   const guardarJuez = async () => {
-    if (!correoJuez.trim()) return
-    setGuardandoJuez(true)
-    try {
-      // Busca la persona por correo en la tabla 'persona' (RLS permite ver todos los perfiles)
-      const { data: persona, error: errPersona } = await supabase
-        .from('persona').select('id, nombre').eq('correo', correoJuez.trim()).single()
+  if (!correoJuez.trim()) return
+  setGuardandoJuez(true)
 
-      // Si no existe ningún usuario con ese correo, muestra error
-      if (errPersona || !persona) {
-        toast.error('No existe ningún usuario registrado con ese correo')
-        return
-      }
+  try {
+    // Busca la persona por correo en la tabla 'persona'
+    const { data: persona, error: errPersona } = await supabase
+      .from('persona')
+      .select('id, nombre')
+      .eq('correo', correoJuez.trim())
+      .single()
 
-      // Restricción: el organizador del evento no puede ser juez de sus propias competiciones
-      if (persona.id === comp.evento.organizador_id) {
-        toast.error('El organizador no puede ser juez de su propia competición')
-        return
-      }
+    if (errPersona || !persona) {
+      toast.error('No existe ningún usuario registrado con ese correo')
+      return
+    }
 
-      // Inserta en competicion_juez — upsert para evitar duplicados sin error
-      const { error: errComp } = await supabase
-        .from('competicion_juez')
-        .upsert({ competicion_id: Number(id), persona_id: persona.id }, { ignoreDuplicates: true })
-      if (errComp) throw errComp
+    // El organizador no puede ser juez de su propia competición
+    if (persona.id === comp.evento.organizador_id) {
+      toast.error('El organizador no puede ser juez de su propia competición')
+      return
+    }
 
-      // Si se seleccionaron encuestas, asigna también al juez en esas encuestas específicas
-      if (encuestasJuez.length > 0) {
-        const { error: errEnc } = await supabase.from('encuesta_juez').upsert(
-          encuestasJuez.map(eid => ({ encuesta_id: eid, persona_id: persona.id })),
+    // Lo asignamos a la competición
+    const { error: errComp } = await supabase
+      .from('competicion_juez')
+      .upsert(
+        { competicion_id: Number(id), persona_id: persona.id },
+        { ignoreDuplicates: true }
+      )
+
+    if (errComp) throw errComp
+
+    let idsEncuestas = encuestasJuez
+
+    // Si no se seleccionó ninguna encuesta manualmente,
+    // lo asignamos a todas las encuestas de esta competición
+    if (idsEncuestas.length === 0) {
+      const { data: encuestasComp, error: errEncuestasComp } = await supabase
+        .from('encuesta')
+        .select('id')
+        .eq('competicion_id', Number(id))
+
+      if (errEncuestasComp) throw errEncuestasComp
+
+      idsEncuestas = (encuestasComp || []).map(e => e.id)
+    }
+
+    // Asignación en encuesta_juez
+    if (idsEncuestas.length > 0) {
+      const { error: errEnc } = await supabase
+        .from('encuesta_juez')
+        .upsert(
+          idsEncuestas.map(eid => ({
+            encuesta_id: eid,
+            persona_id: persona.id
+          })),
           { ignoreDuplicates: true }
         )
-        if (errEnc) throw errEnc
-      }
 
-      await cargarDatos()
-      setCorreoJuez('')
-      setEncuestasJuez([])
-      setModalJuez(false)
-      toast.success('Juez añadido')
-    } catch (err) {
-      toast.error(err.message)
-    } finally {
-      setGuardandoJuez(false)
+      if (errEnc) throw errEnc
     }
+
+    await cargarDatos()
+    setCorreoJuez('')
+    setEncuestasJuez([])
+    setModalJuez(false)
+    toast.success('Juez añadido')
+  } catch (err) {
+    toast.error(err.message)
+  } finally {
+    setGuardandoJuez(false)
   }
+}
 
   // Elimina un juez de la competición por su persona_id
   const eliminarJuez = async (personaId) => {
@@ -376,7 +404,7 @@ export default function CompeticionDetalle() {
                 </div>
                 {/* Link a los resultados de la encuesta */}
                 <Link to={`/admin/encuestas/${e.id}/resultados`} className="text-sm text-indigo-600 hover:underline">
-                  Resultados
+                  Detalles
                 </Link>
               </div>
             ))}

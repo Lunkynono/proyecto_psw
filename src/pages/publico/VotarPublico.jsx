@@ -49,18 +49,37 @@ export default function VotarPublico() {
     setIdentidad(parsed)
     // Cargamos los datos de la encuesta usando el ID guardado en la sesión
     cargarDatos(parsed.encuesta_id)
-  }, [codigo])
+  }, [codigo, navigate])
 
   // Carga en paralelo la encuesta y sus criterios, luego obtiene los proyectos de la competición
   async function cargarDatos(encuestaId) {
     try {
       // Dos consultas en paralelo para optimizar el tiempo de carga
-      const [{ data: enc }, { data: encCrits }] = await Promise.all([
+      const [encuestaRes, criteriosRes] = await Promise.all([
         // Consulta 'encuesta' con el nombre e ID de la competición para obtener los proyectos
-        supabase.from('encuesta').select('*, competicion(nombre, id)').eq('id', encuestaId).single(),
+        supabase
+          .from('encuesta')
+          .select('*, competicion(nombre, id)')
+          .eq('id', encuestaId)
+          .single(),
+
         // Consulta 'encuesta_criterio' para obtener los criterios con sus opciones
-        supabase.from('encuesta_criterio').select('criterio(*, criterio_opcion(*))').eq('encuesta_id', encuestaId)
+        supabase
+          .from('encuesta_criterio')
+          .select(`
+            criterio (
+              *,
+              criterio_opcion (*)
+            )
+          `)
+          .eq('encuesta_id', encuestaId)
       ])
+
+      const { data: enc, error: encError } = encuestaRes
+      const { data: encCrits, error: critError } = criteriosRes
+
+      if (encError) throw encError
+      if (critError) throw critError
 
       // Si la encuesta no existe o ya no está abierta, redirigimos al inicio del flujo
       if (!enc || enc.estado !== 'abierta') {
@@ -69,22 +88,39 @@ export default function VotarPublico() {
       }
 
       // Consulta la tabla 'equipo' para obtener todos los proyectos de la competición
-      const { data: eqs } = await supabase
+      const { data: eqs, error: eqError } = await supabase
         .from('equipo')
-        .select('*, proyecto(*)')
+        .select(`
+          *,
+          proyecto (*)
+        `)
         // Filtramos por la competición asociada a esta encuesta
         .eq('competicion_id', enc.competicion_id)
 
+      if (eqError) throw eqError
+
       setEncuesta(enc)
+
       // Aplanamos el array de equipos para obtener directamente la lista de proyectos
-      setProyectos((eqs || []).flatMap(eq => eq.proyecto || []))
+      const proyectosCargados = (eqs || []).flatMap(eq => eq.proyecto || [])
+      setProyectos(proyectosCargados)
+
       // Extraemos los objetos criterio y eliminamos posibles valores nulos
       const crits = (encCrits || []).map(ec => ec.criterio).filter(Boolean)
+
       // Ordenamos los criterios por su campo 'orden' para mostrarlos en la secuencia correcta
-      crits.sort((a, b) => a.orden - b.orden)
+      crits.sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0))
       setCriterios(crits)
+
+      if (crits.length === 0) {
+        toast.error('Esta encuesta no tiene criterios configurados')
+      }
+
+      if (proyectosCargados.length === 0) {
+        toast.error('Esta competición no tiene proyectos disponibles para votar')
+      }
     } catch (err) {
-      toast.error('Error al cargar la encuesta')
+      toast.error(err.message || 'Error al cargar la encuesta')
     } finally {
       setCargando(false)
     }
@@ -116,6 +152,21 @@ export default function VotarPublico() {
 
   // Procesa el envío del voto del público: registra el votante y guarda los votos de cada proyecto
   const handleEnviar = async () => {
+    if (!encuesta || !identidad) {
+      toast.error('No se ha podido validar la votación')
+      return
+    }
+
+    if (proyectos.length === 0) {
+      toast.error('No hay proyectos disponibles para votar')
+      return
+    }
+
+    if (criterios.length === 0) {
+      toast.error('No hay criterios configurados para esta encuesta')
+      return
+    }
+
     setEnviando(true)
     try {
       // Anti-doble-voto: intentamos insertar en 'publico_registro' con constraint UNIQUE
@@ -125,11 +176,10 @@ export default function VotarPublico() {
         correo_votante: identidad.correo,
         nombre_votante: identidad.nombre
       })
+
       // Si hay error en la inserción, el correo ya votó (violación de constraint única)
       if (regError) {
-        toast.error('Ya has enviado tu voto anteriormente')
-        setEnviando(false)
-        return
+        throw regError
       }
 
       // Iteramos cada proyecto para registrar un voto y sus respuestas por criterio
@@ -142,6 +192,7 @@ export default function VotarPublico() {
           nombre_votante: identidad.nombre,
           correo_votante: identidad.correo
         }).select().single()
+
         if (e1) throw e1
 
         // Construimos el array de respuestas para este proyecto según el tipo de cada criterio
@@ -150,9 +201,12 @@ export default function VotarPublico() {
           const resp = { voto_publico_id: voto.id, criterio_id: c.id }
           // Clave compuesta para acceder al valor de este criterio para este proyecto
           const key = `${proyecto.id}_${c.id}`
+
           // Criterio numérico: guardamos el valor convertido a float
           if (c.tipo === 'numerico') {
-            resp.valor_numerico = respuestas[key] ? parseFloat(respuestas[key]) : null
+            resp.valor_numerico = respuestas[key] !== undefined && respuestas[key] !== ''
+              ? parseFloat(respuestas[key])
+              : null
           // Criterio radio: guardamos el ID de la opción como array de un elemento
           } else if (c.tipo === 'radio') {
             resp.opciones_ids = respuestas[key] ? [Number(respuestas[key])] : null
@@ -161,15 +215,17 @@ export default function VotarPublico() {
             resp.opciones_ids = checklistSel[key]?.length ? checklistSel[key] : null
           // Criterio comentario: guardamos el texto libre
           } else if (c.tipo === 'comentario') {
-            resp.valor_texto = respuestas[key] || null
+            resp.valor_texto = respuestas[key]?.trim() ? respuestas[key].trim() : null
           }
+
           return resp
         // Filtramos las respuestas vacías para no insertar registros sin valor
         }).filter(r => r.valor_numerico != null || r.opciones_ids != null || r.valor_texto != null)
 
         // Solo insertamos en 'respuesta_criterio_publico' si hay al menos una respuesta con valor
         if (respArray.length > 0) {
-          await supabase.from('respuesta_criterio_publico').insert(respArray)
+          const { error: e2 } = await supabase.from('respuesta_criterio_publico').insert(respArray)
+          if (e2) throw e2
         }
       }
 
@@ -220,6 +276,18 @@ export default function VotarPublico() {
           <p className="text-sm text-gray-500">Votando como: {identidad?.nombre}</p>
         </div>
 
+        {/* Aviso si faltan proyectos o criterios */}
+        {(proyectos.length === 0 || criterios.length === 0) && (
+          <div className="mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-700">
+            {proyectos.length === 0 && (
+              <p>Esta competición no tiene proyectos visibles para votar.</p>
+            )}
+            {criterios.length === 0 && (
+              <p>Esta encuesta no tiene criterios visibles para votar.</p>
+            )}
+          </div>
+        )}
+
         {/* Lista de tarjetas, una por proyecto, cada una con todos sus criterios */}
         <div className="space-y-6">
           {proyectos.map(proyecto => (
@@ -260,7 +328,7 @@ export default function VotarPublico() {
                     {c.tipo === 'radio' && (
                       <div className="space-y-2">
                         {/* Ordenamos las opciones por su campo 'orden' */}
-                        {(c.criterio_opcion || []).sort((a, b) => a.orden - b.orden).map(op => (
+                        {(c.criterio_opcion || []).sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0)).map(op => (
                           <label key={op.id} className="flex items-center gap-2 text-sm cursor-pointer">
                             <input
                               type="radio"
@@ -284,7 +352,7 @@ export default function VotarPublico() {
                         {c.max_selecciones && (
                           <p className="text-xs text-gray-400">Máximo {c.max_selecciones} selecciones</p>
                         )}
-                        {(c.criterio_opcion || []).sort((a, b) => a.orden - b.orden).map(op => {
+                        {(c.criterio_opcion || []).sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0)).map(op => {
                           // Clave compuesta para identificar las selecciones de este par proyecto-criterio
                           const key = `${proyecto.id}_${c.id}`
                           // Selecciones actuales para esta clave
@@ -330,7 +398,7 @@ export default function VotarPublico() {
         <div className="mt-6 pb-8">
           <button
             onClick={handleEnviar}
-            disabled={enviando}
+            disabled={enviando || proyectos.length === 0 || criterios.length === 0}
             className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-semibold text-base hover:bg-indigo-700 disabled:opacity-50 transition-colors"
           >
             {enviando ? 'Enviando...' : 'Enviar voto'}

@@ -1,7 +1,7 @@
 // Imports de React: estado y efecto para ciclo de vida
 import { useEffect, useState } from 'react'
 // Parámetros de URL (código de sala) y navegación programática
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 // Gestión del formulario con validación
 import { useForm } from 'react-hook-form'
 // Notificaciones toast para errores y avisos
@@ -45,7 +45,7 @@ export default function Identificarse() {
       setCargando(false)
     }
     cargar()
-  }, [codigo])
+  }, [codigo, navigate])
 
   // Verifica que el correo no haya votado ya y guarda la identidad en localStorage para el siguiente paso
   const onSubmit = async (data) => {
@@ -135,14 +135,25 @@ export default function Identificarse() {
             {/* Mensaje de error si el correo está vacío o tiene formato incorrecto */}
             {errors.correo && <p className="text-red-500 text-xs mt-1">{errors.correo.message}</p>}
           </div>
-          {/* Botón de envío: deshabilitado mientras se verifica el registro */}
-          <button
-            type="submit"
-            disabled={enviando}
-            className="w-full bg-indigo-600 text-white py-2.5 rounded-xl font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-          >
-            {enviando ? 'Verificando...' : 'Continuar'}
-          </button>
+
+          {/* Botones */}
+          <div className="flex gap-3">
+            <Link
+              to="/sala"
+              className="w-full text-center border border-gray-300 text-gray-700 py-2.5 rounded-xl font-medium hover:bg-gray-50 transition-colors"
+            >
+              Volver
+            </Link>
+
+            {/* Botón de envío: deshabilitado mientras se verifica el registro */}
+            <button
+              type="submit"
+              disabled={enviando}
+              className="w-full bg-indigo-600 text-white py-2.5 rounded-xl font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+            >
+              {enviando ? 'Verificando...' : 'Continuar'}
+            </button>
+          </div>
         </form>
       </div>
     </div>

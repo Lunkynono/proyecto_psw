@@ -27,10 +27,14 @@ export default function JuezDashboard() {
   const [cargando, setCargando] = useState(true)
 
   // Cargamos las encuestas cada vez que cambia el usuario autenticado
-  useEffect(() => { cargarEncuestas() }, [user])
+  useEffect(() => {
+    if (!user) return
+    cargarEncuestas()
+  }, [user])
 
   // Carga las encuestas asignadas al juez y calcula cuáles proyectos le quedan por evaluar
   async function cargarEncuestas() {
+    setCargando(true)
     try {
       // Consulta la tabla 'encuesta_juez' para obtener las encuestas asignadas al juez actual,
       // incluyendo datos anidados de la competición y el evento
@@ -38,6 +42,7 @@ export default function JuezDashboard() {
         .from('encuesta_juez')
         .select('encuesta(*, competicion(nombre, evento(nombre)))')
         .eq('persona_id', user.id)
+
       if (error) throw error
 
       // Extraemos el objeto encuesta de cada fila y filtramos solo las que están abiertas
@@ -46,45 +51,63 @@ export default function JuezDashboard() {
         .filter(e => e?.estado === 'abierta')
 
       // Para cada encuesta abierta, calculamos los proyectos pendientes de votación
-      const result = await Promise.all(encs.map(async (enc) => {
-        // Obtenemos en paralelo: los equipos/proyectos de la competición y el voter_hash del juez
-        const [{ data: equipos }, voterHash] = await Promise.all([
-          // Consulta 'equipo' para obtener los proyectos asociados a la competición de esta encuesta
-          supabase.from('equipo').select('proyecto(*)').eq('competicion_id', enc.competicion_id),
-          // Genera el voter_hash = SHA-256(user.id + encuesta.id) para identificar los votos del juez
-          generarVoterHash(user.id, enc.id)
-        ])
+      const result = await Promise.all(
+        encs.map(async (enc) => {
+          // Obtenemos en paralelo: los equipos/proyectos de la competición y el voter_hash del juez
+          const [{ data: equipos, error: equiposError }, voterHash] = await Promise.all([
+            // Consulta 'equipo' para obtener los proyectos asociados a la competición de esta encuesta
+            supabase
+              .from('equipo')
+              .select('proyecto(*)')
+              .eq('competicion_id', enc.competicion_id),
 
-        // Aplanamos el array de equipos para obtener directamente la lista de proyectos
-        const proyectos = (equipos || []).flatMap(eq => eq.proyecto || [])
+            // Genera el voter_hash = SHA-256(user.id + encuesta.id) para identificar los votos del juez
+            generarVoterHash(user.id, enc.id)
+          ])
 
-        // Solo los votos de ESTE juez, identificados por su voter_hash
-        // Consulta 'voto' filtrando por encuesta y por el voter_hash único del juez
-        const { data: misVotos } = await supabase
-          .from('voto')
-          .select('proyecto_id')
-          .eq('encuesta_id', enc.id)
-          .eq('voter_hash', voterHash)
+          if (equiposError) throw equiposError
 
-        // Creamos un Set de IDs de proyectos ya votados para búsqueda eficiente
-        const votados = new Set((misVotos || []).map(v => v.proyecto_id))
-        // Filtramos los proyectos que aún no tienen voto registrado por este juez
-        const pendientes = proyectos.filter(p => !votados.has(p.id))
+          // Aplanamos el array de equipos para obtener directamente la lista de proyectos
+          const proyectos = (equipos || []).flatMap(eq => eq.proyecto || [])
 
-        // Devolvemos la encuesta enriquecida con sus proyectos y los pendientes de evaluar
-        return { ...enc, proyectos, pendientes }
-      }))
+          // Solo los votos de ESTE juez, identificados por su voter_hash
+          // Consulta 'voto' filtrando por encuesta y por el voter_hash único del juez
+          const { data: misVotos, error: votosError } = await supabase
+            .from('voto')
+            .select('proyecto_id')
+            .eq('encuesta_id', enc.id)
+            .eq('voter_hash', voterHash)
+
+          if (votosError) throw votosError
+
+          // Creamos un Set de IDs de proyectos ya votados para búsqueda eficiente
+          const votados = new Set((misVotos || []).map(v => v.proyecto_id))
+          // Filtramos los proyectos que aún no tienen voto registrado por este juez
+          const pendientes = proyectos.filter(p => !votados.has(p.id))
+
+          // Devolvemos la encuesta enriquecida con sus proyectos y los pendientes de evaluar
+          return { ...enc, proyectos, pendientes }
+        })
+      )
 
       setEncuestas(result)
     } catch (err) {
-      toast.error('Error al cargar encuestas')
+      toast.error(err.message || 'Error al cargar encuestas')
     } finally {
       setCargando(false)
     }
   }
 
   // Mientras se cargan los datos mostramos el spinner centrado dentro del layout
-  if (cargando) return <Layout><div className="flex justify-center py-12"><Spinner /></div></Layout>
+  if (cargando) {
+    return (
+      <Layout>
+        <div className="flex justify-center py-12">
+          <Spinner />
+        </div>
+      </Layout>
+    )
+  }
 
   return (
     <Layout>
@@ -107,8 +130,11 @@ export default function JuezDashboard() {
                 <div>
                   <h2 className="font-semibold text-gray-900">{enc.nombre}</h2>
                   {/* Ruta jerárquica: competición · evento */}
-                  <p className="text-sm text-gray-500">{enc.competicion?.nombre} · {enc.competicion?.evento?.nombre}</p>
+                  <p className="text-sm text-gray-500">
+                    {enc.competicion?.nombre} · {enc.competicion?.evento?.nombre}
+                  </p>
                 </div>
+
                 {/* Indicador de estado: checkmark verde si está todo votado, badge amarillo con los pendientes */}
                 {enc.pendientes.length === 0 ? (
                   <div className="flex items-center gap-1 text-green-600 text-sm font-medium">
@@ -117,22 +143,34 @@ export default function JuezDashboard() {
                   </div>
                 ) : (
                   // Badge que muestra el número de proyectos pendientes de evaluar
-                  <Badge color="yellow">{enc.pendientes.length} pendiente{enc.pendientes.length !== 1 ? 's' : ''}</Badge>
+                  <Badge color="yellow">
+                    {enc.pendientes.length} pendiente{enc.pendientes.length !== 1 ? 's' : ''}
+                  </Badge>
                 )}
               </div>
+
               {/* Grid de proyectos: verde si ya votado, blanco si pendiente */}
               <div className="grid gap-2 sm:grid-cols-2">
                 {enc.proyectos.map(p => {
                   // Un proyecto está votado si NO aparece en la lista de pendientes
                   const votado = !enc.pendientes.find(x => x.id === p.id)
+
                   return (
                     // Fondo verde si ya evaluado, blanco si pendiente
-                    <div key={p.id} className={`flex items-center justify-between p-3 rounded-lg border ${votado ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'}`}>
+                    <div
+                      key={p.id}
+                      className={`flex items-center justify-between p-3 rounded-lg border ${
+                        votado ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'
+                      }`}
+                    >
                       <div>
                         <p className="text-sm font-medium text-gray-800">{p.nombre}</p>
                         {/* Descripción truncada a una línea si existe */}
-                        {p.descripcion && <p className="text-xs text-gray-500 line-clamp-1">{p.descripcion}</p>}
+                        {p.descripcion && (
+                          <p className="text-xs text-gray-500 line-clamp-1">{p.descripcion}</p>
+                        )}
                       </div>
+
                       {/* Si ya votó muestra checkmark; si no, muestra enlace a la página de evaluación */}
                       {votado ? (
                         <CheckCircle size={18} className="text-green-500 flex-shrink-0" />
