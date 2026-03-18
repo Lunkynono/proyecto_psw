@@ -11,7 +11,7 @@ import { supabase } from '../../lib/supabase'
 // Spinner de carga mientras se obtienen los datos de la sala
 import Spinner from '../../components/ui/Spinner'
 
-// Segunda página del flujo público: el votante introduce su nombre y correo para identificarse
+// Segunda página del flujo público: el votante introduce su correo para identificarse
 export default function Identificarse() {
   // Código de sala extraído de la URL, ej: /sala/ABC123
   const { codigo } = useParams()
@@ -23,7 +23,7 @@ export default function Identificarse() {
   // Controla si se está procesando la verificación del correo
   const [enviando, setEnviando] = useState(false)
 
-  // Inicializamos react-hook-form para los campos nombre y correo
+  // Inicializamos react-hook-form para el campo correo
   const { register, handleSubmit, formState: { errors } } = useForm()
 
   // Al montar el componente, cargamos los datos de la sala usando el código de la URL
@@ -71,7 +71,6 @@ export default function Identificarse() {
 
       // Guardamos la identidad del votante en localStorage para recuperarla en VotarPublico
       localStorage.setItem('votify_sala', JSON.stringify({
-        nombre: data.nombre.trim(),
         correo: data.correo.trim(),
         // Guardamos el código para verificar en la siguiente página que sigue siendo el mismo
         codigo,
@@ -103,22 +102,11 @@ export default function Identificarse() {
           <p className="text-xs text-indigo-600 font-semibold uppercase tracking-wide">{encuesta?.competicion?.nombre}</p>
           {/* Nombre de la encuesta como título principal */}
           <h1 className="text-xl font-bold text-gray-900 mt-1">{encuesta?.nombre}</h1>
-          <p className="text-sm text-gray-500 mt-1">Identifícate para votar</p>
+          <p className="text-sm text-gray-500 mt-1">Introduce tu correo para votar</p>
         </div>
 
-        {/* Formulario de identificación con campos de nombre y correo */}
+        {/* Formulario de identificación con campo de correo */}
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          {/* Campo de nombre completo: obligatorio */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Nombre completo *</label>
-            <input
-              {...register('nombre', { required: 'Tu nombre es obligatorio' })}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              placeholder="Tu nombre"
-            />
-            {/* Mensaje de error si el campo nombre está vacío */}
-            {errors.nombre && <p className="text-red-500 text-xs mt-1">{errors.nombre.message}</p>}
-          </div>
           {/* Campo de correo electrónico: obligatorio y con validación de formato */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Correo electrónico *</label>

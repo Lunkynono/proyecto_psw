@@ -172,9 +172,8 @@ export default function VotarPublico() {
       // Anti-doble-voto: intentamos insertar en 'publico_registro' con constraint UNIQUE
       // La constraint de unicidad (encuesta_id, correo_votante) en la BD evita duplicados
       const { error: regError } = await supabase.from('publico_registro').insert({
-        encuesta_id: encuesta.id,
-        correo_votante: identidad.correo,
-        nombre_votante: identidad.nombre
+      encuesta_id: encuesta.id,
+      correo_votante: identidad.correo
       })
 
       // Si hay error en la inserción, el correo ya votó (violación de constraint única)
@@ -186,11 +185,10 @@ export default function VotarPublico() {
       for (const proyecto of proyectos) {
         // Insertamos el voto público en la tabla 'voto_publico' con los datos del votante
         const { data: voto, error: e1 } = await supabase.from('voto_publico').insert({
-          encuesta_id: encuesta.id,
-          proyecto_id: proyecto.id,
-          // Guardamos nombre y correo del votante para auditoría
-          nombre_votante: identidad.nombre,
-          correo_votante: identidad.correo
+        encuesta_id: encuesta.id,
+        proyecto_id: proyecto.id,
+      // Guardamos solo el correo del votante para evitar doble voto
+        correo_votante: identidad.correo
         }).select().single()
 
         if (e1) throw e1
@@ -273,7 +271,7 @@ export default function VotarPublico() {
           {/* Nombre de la encuesta como título principal */}
           <h1 className="text-xl font-bold text-gray-900 mt-1">{encuesta?.nombre}</h1>
           {/* Recordatorio de quién está votando */}
-          <p className="text-sm text-gray-500">Votando como: {identidad?.nombre}</p>
+         <p className="text-sm text-gray-500">Votación anónima</p>
         </div>
 
         {/* Aviso si faltan proyectos o criterios */}
