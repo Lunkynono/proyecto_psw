@@ -8,6 +8,8 @@ import { CheckCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 // Cliente de Supabase para insertar votos y respuestas
 import { supabase } from '../../lib/supabase'
+// Factory Method: votante público
+import { VotanteFactory } from '../../factories/VotanteFactory'
 // Spinner de carga mientras se obtienen datos de la encuesta
 import Spinner from '../../components/ui/Spinner'
 
@@ -169,67 +171,17 @@ export default function VotarPublico() {
 
     setEnviando(true)
     try {
-      // Anti-doble-voto: intentamos insertar en 'publico_registro' con constraint UNIQUE
-      // La constraint de unicidad (encuesta_id, correo_votante) en la BD evita duplicados
-      const { error: regError } = await supabase.from('publico_registro').insert({
-      encuesta_id: encuesta.id,
-      correo_votante: identidad.correo
+      const votante = VotanteFactory.crear('publico', supabase)
+      await votante.votar({
+        encuesta,
+        identidad,
+        proyectos,
+        criterios,
+        respuestas,
+        checklistSel
       })
 
-      // Si hay error en la inserción, el correo ya votó (violación de constraint única)
-      if (regError) {
-        throw regError
-      }
-
-      // Iteramos cada proyecto para registrar un voto y sus respuestas por criterio
-      for (const proyecto of proyectos) {
-        // Insertamos el voto público en la tabla 'voto_publico' con los datos del votante
-        const { data: voto, error: e1 } = await supabase.from('voto_publico').insert({
-        encuesta_id: encuesta.id,
-        proyecto_id: proyecto.id,
-      // Guardamos solo el correo del votante para evitar doble voto
-        correo_votante: identidad.correo
-        }).select().single()
-
-        if (e1) throw e1
-
-        // Construimos el array de respuestas para este proyecto según el tipo de cada criterio
-        const respArray = criterios.map(c => {
-          // Base de cada respuesta: referencia al voto público y al criterio
-          const resp = { voto_publico_id: voto.id, criterio_id: c.id }
-          // Clave compuesta para acceder al valor de este criterio para este proyecto
-          const key = `${proyecto.id}_${c.id}`
-
-          // Criterio numérico: guardamos el valor convertido a float
-          if (c.tipo === 'numerico') {
-            resp.valor_numerico = respuestas[key] !== undefined && respuestas[key] !== ''
-              ? parseFloat(respuestas[key])
-              : null
-          // Criterio radio: guardamos el ID de la opción como array de un elemento
-          } else if (c.tipo === 'radio') {
-            resp.opciones_ids = respuestas[key] ? [Number(respuestas[key])] : null
-          // Criterio checklist: guardamos el array de IDs de opciones seleccionadas
-          } else if (c.tipo === 'checklist') {
-            resp.opciones_ids = checklistSel[key]?.length ? checklistSel[key] : null
-          // Criterio comentario: guardamos el texto libre
-          } else if (c.tipo === 'comentario') {
-            resp.valor_texto = respuestas[key]?.trim() ? respuestas[key].trim() : null
-          }
-
-          return resp
-        // Filtramos las respuestas vacías para no insertar registros sin valor
-        }).filter(r => r.valor_numerico != null || r.opciones_ids != null || r.valor_texto != null)
-
-        // Solo insertamos en 'respuesta_criterio_publico' si hay al menos una respuesta con valor
-        if (respArray.length > 0) {
-          const { error: e2 } = await supabase.from('respuesta_criterio_publico').insert(respArray)
-          if (e2) throw e2
-        }
-      }
-
-      // Limpiamos la identidad del localStorage: la sesión de votación ha terminado
       localStorage.removeItem('votify_sala')
-      // Mostramos la pantalla de confirmación de voto exitoso
       setCompletado(true)
     } catch (err) {
       toast.error(err.message || 'Error al enviar el voto')
