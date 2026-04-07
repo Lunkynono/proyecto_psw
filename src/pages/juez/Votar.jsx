@@ -12,6 +12,8 @@ import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
 // Utilidad para generar el voter_hash = SHA-256(userId + encuestaId)
 import { generarVoterHash } from '../../utils/hash'
+// Factory Method: crea la clase de votante según el rol
+import { VotanteFactory } from '../../factories/VotanteFactory'
 // Componentes de UI: layout, botón y spinner de carga
 import Layout from '../../components/layout/Layout'
 import Button from '../../components/ui/Button'
@@ -86,67 +88,24 @@ export default function Votar() {
     })
   }
 
-  // Procesa el envío del formulario de votación
+  // Procesa el envío del formulario de votación delegando en la fábrica
   const onSubmit = async (data) => {
     setEnviando(true)
     try {
-      // Re-validar que la encuesta sigue abierta antes de registrar el voto
-      // Consulta 'encuesta' para comprobar el estado actual (podría haber cambiado)
-      const { data: enc } = await supabase
-        .from('encuesta').select('estado').eq('id', encuestaId).single()
-      if (enc?.estado !== 'abierta') {
-        toast.error('La encuesta ya no está abierta')
-        return navigate('/juez')
-      }
-
-      // Generamos el voter_hash = SHA-256(userId + encuestaId) para identificar este voto
+      //Extrae
+      const votante = VotanteFactory.crear('juez', supabase)// Crea objeto dominio
       const voterHash = await generarVoterHash(user.id, encuestaId)
 
-      // Insertamos el registro principal del voto en la tabla 'voto'
-      const { data: voto, error: e1 } = await supabase.from('voto').insert({
-        encuesta_id: Number(encuestaId),
-        proyecto_id: Number(proyectoId),
-        // El voter_hash garantiza unicidad: la constraint única de la BD detectará duplicados
-        voter_hash: voterHash
-      }).select().single()
-      if (e1) throw e1
-
-      // Construimos el array de respuestas por criterio según el tipo de cada uno
-      const respuestas = criterios.map(c => {
-        // Base de cada respuesta: referencia al voto y al criterio
-        const resp = {
-          voto_id: voto.id,
-          criterio_id: c.id
-        }
-        // Criterio numérico: guardamos el valor como float en 'valor_numerico'
-        if (c.tipo === 'numerico') {
-          resp.valor_numerico = parseFloat(data[`criterio_${c.id}`]) || null
-        // Criterio radio: guardamos el ID de la opción seleccionada como array de un elemento
-        } else if (c.tipo === 'radio') {
-          resp.opciones_ids = data[`criterio_${c.id}`] ? [Number(data[`criterio_${c.id}`])] : null
-        // Criterio checklist: guardamos el array de IDs de opciones seleccionadas
-        } else if (c.tipo === 'checklist') {
-          resp.opciones_ids = checklistSeleccionados[c.id]?.length ? checklistSeleccionados[c.id] : null
-        // Criterio comentario: guardamos el texto libre en 'valor_texto'
-        } else if (c.tipo === 'comentario') {
-          resp.valor_texto = data[`criterio_${c.id}`] || null
-        }
-        return resp
-      })
-
-      // Insertamos todas las respuestas de criterios en una sola operación
-      const { error: e2 } = await supabase.from('respuesta_criterio').insert(respuestas)
-      if (e2) throw e2
+      //no conoce tablas, solo contrato
+      await votante.votar({encuestaId, proyectoId, voterHash, criterios,data, checklistSeleccionados})
 
       toast.success('Voto registrado correctamente')
-      // Redirigimos al dashboard del juez tras guardar correctamente
       navigate('/juez')
-    } catch (err) {
-      // El código 23505 es la violación de constraint UNIQUE de PostgreSQL (voto duplicado)
-      if (err.code === '23505') {
+    } catch (err) {//manejo de errores
+      if (err.code === '23505') {//duplicado
         toast.error('Ya has votado por este proyecto')
       } else {
-        toast.error(err.message)
+        toast.error(err.message || 'Error al registrar el voto')
       }
     } finally {
       setEnviando(false)
