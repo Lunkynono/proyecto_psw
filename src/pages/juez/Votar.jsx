@@ -13,7 +13,7 @@ import { useAuthStore } from '../../store/authStore'
 // Utilidad para generar el voter_hash = SHA-256(userId + encuestaId)
 import { generarVoterHash } from '../../utils/hash'
 // Factory Method: crea la clase de votante según el rol
-import { VotanteFactory } from '../../factories/VotanteFactory'
+import { VotanteJuezCreator } from '../../factories/creators/VotanteJuezCreator'
 // Componentes de UI: layout, botón y spinner de carga
 import Layout from '../../components/layout/Layout'
 import Button from '../../components/ui/Button'
@@ -90,27 +90,34 @@ export default function Votar() {
 
   // Procesa el envío del formulario de votación delegando en la fábrica
   const onSubmit = async (data) => {
-    setEnviando(true)
-    try {
-      //Extrae
-      const votante = VotanteFactory.crear('juez', supabase)// Crea objeto dominio
-      const voterHash = await generarVoterHash(user.id, encuestaId)
+  setEnviando(true)
 
-      //no conoce tablas, solo contrato
-      await votante.votar({encuestaId, proyectoId, voterHash, criterios,data, checklistSeleccionados})
+  try {
+    const creator = new VotanteJuezCreator(supabase)
+    const votante = creator.crear()
+    const voterHash = await generarVoterHash(user.id, encuestaId)
 
-      toast.success('Voto registrado correctamente')
-      navigate('/juez')
-    } catch (err) {//manejo de errores
-      if (err.code === '23505') {//duplicado
-        toast.error('Ya has votado por este proyecto')
-      } else {
-        toast.error(err.message || 'Error al registrar el voto')
-      }
-    } finally {
-      setEnviando(false)
+    await votante.votar({
+      encuestaId,
+      proyectoId,
+      voterHash,
+      criterios,
+      data,
+      checklistSeleccionados
+    })
+
+    toast.success('Voto registrado correctamente')
+    navigate('/juez')
+  } catch (err) {
+    if (err.code === '23505') {
+      toast.error('Ya has votado este proyecto en esta encuesta')
+    } else {
+      toast.error(err.message || 'Error al registrar el voto')
     }
+  } finally {
+    setEnviando(false)
   }
+}
 
   // Mientras se cargan los datos mostramos el spinner centrado
   if (cargando) return <Layout><div className="flex justify-center py-12"><Spinner /></div></Layout>

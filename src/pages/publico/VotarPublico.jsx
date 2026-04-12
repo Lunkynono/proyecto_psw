@@ -9,7 +9,7 @@ import toast from 'react-hot-toast'
 // Cliente de Supabase para insertar votos y respuestas
 import { supabase } from '../../lib/supabase'
 // Factory Method: votante público
-import { VotanteFactory } from '../../factories/VotanteFactory'
+import { VotantePublicoCreator } from '../../factories/creators/VotantePublicoCreator'
 // Spinner de carga mientras se obtienen datos de la encuesta
 import Spinner from '../../components/ui/Spinner'
 
@@ -153,42 +153,45 @@ export default function VotarPublico() {
   }
 
   // Procesa el envío del voto del público: registra el votante y guarda los votos de cada proyecto
-  const handleEnviar = async () => {
-    if (!encuesta || !identidad) {
-      toast.error('No se ha podido validar la votación')
-      return
-    }
-
-    if (proyectos.length === 0) {
-      toast.error('No hay proyectos disponibles para votar')
-      return
-    }
-
-    if (criterios.length === 0) {
-      toast.error('No hay criterios configurados para esta encuesta')
-      return
-    }
-
-    setEnviando(true)
-    try {
-      const votante = VotanteFactory.crear('publico', supabase)
-      await votante.votar({
-        encuesta,
-        identidad,
-        proyectos,
-        criterios,
-        respuestas,
-        checklistSel
-      })
-
-      localStorage.removeItem('votify_sala')
-      setCompletado(true)
-    } catch (err) {
-      toast.error(err.message || 'Error al enviar el voto')
-    } finally {
-      setEnviando(false)
-    }
+ const handleEnviar = async () => {
+  if (!encuesta || !identidad) {
+    toast.error('No se ha podido validar la votación')
+    return
   }
+
+  if (proyectos.length === 0) {
+    toast.error('No hay proyectos disponibles para votar')
+    return
+  }
+
+  if (criterios.length === 0) {
+    toast.error('No hay criterios configurados para esta encuesta')
+    return
+  }
+
+  setEnviando(true)
+
+  try {
+    const creator = new VotantePublicoCreator(supabase)
+    const votante = creator.crear()
+
+    await votante.votar({
+      encuesta,
+      identidad,
+      proyectos,
+      criterios,
+      respuestas,
+      checklistSel
+    })
+
+    localStorage.removeItem('votify_sala')
+    setCompletado(true)
+  } catch (err) {
+    toast.error(err.message || 'Error al enviar el voto')
+  } finally {
+    setEnviando(false)
+  }
+}
 
   // Mientras se cargan los datos mostramos el spinner centrado en pantalla
   if (cargando) return <div className="min-h-screen flex items-center justify-center"><Spinner /></div>

@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase'
+import { CriterioFactory } from './criterios/CriterioFactory'
 
 class VotanteBase {
   constructor(supabaseClient) { //Guarda cliente supabase
@@ -37,20 +38,12 @@ class VotanteJuez extends VotanteBase {//Extiende votante base e implementa vota
 
     // Construir respuestas según tipos de criterio
     const respuestas = criterios.map(c => {
-      const resp = {
-        voto_id: voto.id,
-        criterio_id: c.id
-      }
-      if (c.tipo === 'numerico') {
-        resp.valor_numerico = parseFloat(data[`criterio_${c.id}`]) || null
-      } else if (c.tipo === 'radio') {
-        resp.opciones_ids = data[`criterio_${c.id}`] ? [Number(data[`criterio_${c.id}`])] : null
-      } else if (c.tipo === 'checklist') {
-        resp.opciones_ids = checklistSeleccionados[c.id]?.length ? checklistSeleccionados[c.id] : null
-      } else if (c.tipo === 'comentario') {
-        resp.valor_texto = data[`criterio_${c.id}`] || null
-      }
-      return resp
+      const criterio = CriterioFactory.crear(c)
+      return criterio.construirRespuestaJuez({
+        votoId: voto.id,
+        data,
+        checklistSeleccionados
+      })
     })
     //Inserta respuestas en respuesta_criterio
     const { error: e2 } = await this.supabase.from('respuesta_criterio').insert(respuestas)
@@ -92,22 +85,13 @@ class VotantePublico extends VotanteBase {//Similar al juez
       if (e1) throw e1
 
       const respArray = criterios.map(c => {
-        const resp = { voto_publico_id: voto.id, criterio_id: c.id }
-        const key = `${proyecto.id}_${c.id}`
-
-        if (c.tipo === 'numerico') {
-          resp.valor_numerico = respuestas[key] !== undefined && respuestas[key] !== ''
-            ? parseFloat(respuestas[key])
-            : null
-        } else if (c.tipo === 'radio') {
-          resp.opciones_ids = respuestas[key] ? [Number(respuestas[key])] : null
-        } else if (c.tipo === 'checklist') {
-          resp.opciones_ids = checklistSel[key]?.length ? checklistSel[key] : null
-        } else if (c.tipo === 'comentario') {
-          resp.valor_texto = respuestas[key]?.trim() ? respuestas[key].trim() : null
-        }
-
-        return resp
+        const criterio = CriterioFactory.crear(c)
+        return criterio.construirRespuestaPublico({
+          votoId: voto.id,
+          proyectoId: proyecto.id,
+          respuestas,
+          checklistSel
+        })
       }).filter(r => r.valor_numerico != null || r.opciones_ids != null || r.valor_texto != null)
 
       if (respArray.length > 0) {
