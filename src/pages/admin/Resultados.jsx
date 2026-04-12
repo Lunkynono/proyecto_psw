@@ -34,7 +34,7 @@ export default function Resultados() {
 
   useEffect(() => { cargarDatos() }, [encuestaId])
 
-  // Carga la encuesta, el ranking almacenado y los comentarios cualitativos
+    // Carga la encuesta, el ranking almacenado y los comentarios cualitativos
   async function cargarDatos() {
     try {
       // Trae la encuesta con su competición y evento para el breadcrumb y control de acceso
@@ -48,12 +48,16 @@ export default function Resultados() {
       setEncuesta(enc)
       setEstado(enc.estado)
 
-      // Trae el ranking calculado (tabla 'resultado'), ordenado por posición
-      const { data: res } = await supabase
+      // Trae el ranking calculado (tabla 'resultado'), ordenado de mayor a menor puntaje
+      const { data: res, error: resError } = await supabase
         .from('resultado')
         .select('*, proyecto(nombre, equipo(nombre))')
         .eq('encuesta_id', encuestaId)
-        .order('posicion_final')
+        .order('puntaje_manual', { ascending: false, nullsFirst: false })
+        .order('puntaje_calculado', { ascending: false })
+        .order('posicion_final', { ascending: true })
+
+      if (resError) throw resError
 
       setResultados(res || [])
 
@@ -299,7 +303,13 @@ export default function Resultados() {
               <p className="text-sm text-gray-500 text-center py-8">No hay resultados aún. Haz clic en "Calcular resultados".</p>
             ) : (
               <div className="space-y-3">
-                {resultados.map(r => {
+                {[...resultados]
+                    .sort((a, b) => {
+                      const puntajeA = parseFloat(a.puntaje_manual ?? a.puntaje_calculado ?? 0)
+                      const puntajeB = parseFloat(b.puntaje_manual ?? b.puntaje_calculado ?? 0)
+                      return puntajeB - puntajeA
+                    })
+                    .map(r => {
                   // Usa el puntaje manual si existe, si no usa el calculado
                   const puntaje = parseFloat(r.puntaje_manual ?? r.puntaje_calculado ?? 0)
                   const esManual = r.puntaje_manual != null
