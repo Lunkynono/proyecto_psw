@@ -84,82 +84,134 @@ export default function Resultados() {
     }
   }
 
-  // Calcula el ranking de proyectos a partir de los votos registrados
+    // Calcula el ranking de proyectos a partir de los votos registrados
   // Fórmula: para cada proyecto, promedia los valores numéricos por criterio y los pondera
   // Almacena los resultados en la tabla 'resultado' con upsert
   const calcularResultados = async () => {
     setCalculando(true)
     try {
+      // Obtiene todos los proyectos de la competición asociada a la encuesta
+      const { data: equipos, error: equiposError } = await supabase
+        .from('equipo')
+        .select('proyecto(*)')
+        .eq('competicion_id', encuesta.competicion_id)
+
+      if (equiposError) throw equiposError
+
+      const proyectos = (equipos || []).flatMap(eq => eq.proyecto || [])
+
+      if (proyectos.length === 0) {
+        throw new Error('No hay proyectos en esta competición')
+      }
+
       // Obtiene los criterios numéricos de la encuesta con sus pesos
-      const { data: encCriterios } = await supabase
+      const { data: encCriterios, error: critError } = await supabase
         .from('encuesta_criterio')
         .select('criterio(id, peso, tipo)')
         .eq('encuesta_id', encuestaId)
 
+      if (critError) throw critError
+
       const criteriosNumericos = (encCriterios || [])
         .map(ec => ec.criterio)
-        .filter(c => c.tipo === 'numerico')
+        .filter(c => c?.tipo === 'numerico')
+
       // Suma total de pesos para normalizar los puntajes
       const sumaPesos = criteriosNumericos.reduce((s, c) => s + parseFloat(c.peso), 0)
 
-      // Obtiene todos los votos del jurado para esta encuesta con sus respuestas numéricas
-      const { data: votos } = await supabase
-        .from('voto')
-        .select('proyecto_id, respuesta_criterio(criterio_id, valor_numerico)')
-        .eq('encuesta_id', encuestaId)
+      // Calcula el puntaje proyecto a proyecto
+      const puntajes = await Promise.all(
+        proyectos.map(async (proyecto) => {
+          // Contar votos del público y del jurado para este proyecto
+          const [{ count: votosPublico }, { count: votosJuez }] = await Promise.all([
+            supabase
+              .from('voto_publico')
+              .select('*', { count: 'exact', head: true })
+              .eq('encuesta_id', encuestaId)
+              .eq('proyecto_id', proyecto.id),
 
-      // Obtiene los votos del público para esta encuesta
-      const votosPub = await supabase
-        .from('voto_publico')
-        .select('proyecto_id, respuesta_criterio_publico(criterio_id, valor_numerico)')
-        .eq('encuesta_id', encuestaId)
+            supabase
+              .from('voto')
+              .select('*', { count: 'exact', head: true })
+              .eq('encuesta_id', encuestaId)
+              .eq('proyecto_id', proyecto.id)
+          ])
 
-      // Agrupa todas las respuestas por proyecto
-      const proyectoMap = {}
-      const procesarVotos = (vs, keyResp) => {
-        ;(vs || []).forEach(v => {
-          if (!proyectoMap[v.proyecto_id]) proyectoMap[v.proyecto_id] = []
-          proyectoMap[v.proyecto_id].push(...(v[keyResp] || []))
-        })
-      }
-      procesarVotos(votos, 'respuesta_criterio')
-      procesarVotos(votosPub.data, 'respuesta_criterio_publico')
+          const votosTotales = (votosPublico || 0) + (votosJuez || 0)
 
-      // Calcula el puntaje ponderado para cada proyecto
-      const puntajes = Object.entries(proyectoMap).map(([proyId, respuestas]) => {
-        let suma = 0
-        criteriosNumericos.forEach(c => {
-          // Toma todas las respuestas para este criterio y proyecto
-          const vals = respuestas.filter(r => r.criterio_id === c.id && r.valor_numerico != null)
-          if (vals.length > 0) {
-            // Media aritmética de los valores × peso del criterio
-            const media = vals.reduce((s, r) => s + parseFloat(r.valor_numerico), 0) / vals.length
-            suma += media * parseFloat(c.peso)
+          let puntaje = 0
+
+          // Si hay criterios numéricos, calcular media ponderada
+          if (criteriosNumericos.length > 0 && sumaPesos > 0) {
+            const [{ data: respuestasPublico }, { data: respuestasJuez }] = await Promise.all([
+              supabase
+                .from('respuesta_criterio_publico')
+                .select('criterio_id, valor_numerico, voto_publico!inner(encuesta_id, proyecto_id)')
+                .eq('voto_publico.encuesta_id', encuestaId)
+                .eq('voto_publico.proyecto_id', proyecto.id)
+                .not('valor_numerico', 'is', null),
+
+              supabase
+                .from('respuesta_criterio')
+                .select('criterio_id, valor_numerico, voto!inner(encuesta_id, proyecto_id)')
+                .eq('voto.encuesta_id', encuestaId)
+                .eq('voto.proyecto_id', proyecto.id)
+                .not('valor_numerico', 'is', null)
+            ])
+
+            const todasLasRespuestas = [
+              ...(respuestasPublico || []),
+              ...(respuestasJuez || [])
+            ]
+
+            let suma = 0
+
+            criteriosNumericos.forEach(c => {
+              const vals = todasLasRespuestas.filter(
+                r => r.criterio_id === c.id && r.valor_numerico != null
+              )
+
+              if (vals.length > 0) {
+                const media =
+                  vals.reduce((acc, r) => acc + parseFloat(r.valor_numerico), 0) / vals.length
+
+                suma += media * parseFloat(c.peso)
+              }
+            })
+
+            puntaje = sumaPesos > 0 ? suma / sumaPesos : 0
+          } else {
+            // Si no hay criterios numéricos, usar el número de votos como puntaje
+            puntaje = votosTotales
+          }
+
+          return {
+            proyecto_id: proyecto.id,
+            puntaje
           }
         })
-        // Normaliza dividiendo por la suma de pesos
-        const puntaje = sumaPesos > 0 ? suma / sumaPesos : 0
-        return { proyecto_id: Number(proyId), puntaje }
-      })
+      )
 
       // Ordena de mayor a menor puntaje
       puntajes.sort((a, b) => b.puntaje - a.puntaje)
 
       // Guarda o actualiza los resultados en la tabla 'resultado'
       for (let i = 0; i < puntajes.length; i++) {
-        await supabase.from('resultado').upsert({
+        const { error } = await supabase.from('resultado').upsert({
           encuesta_id: Number(encuestaId),
           proyecto_id: puntajes[i].proyecto_id,
           puntaje_calculado: puntajes[i].puntaje,
           posicion_final: i + 1,               // Posición en el ranking (1 = primero)
           calculado_en: new Date().toISOString()
-        }, { onConflict: 'encuesta_id,proyecto_id' })  // Actualiza si ya existe para ese proyecto
+        }, { onConflict: 'encuesta_id,proyecto_id' })
+
+        if (error) throw error
       }
 
       await cargarDatos()
       toast.success('Resultados calculados')
     } catch (err) {
-      toast.error(err.message)
+      toast.error(err.message || 'Error al calcular resultados')
     } finally {
       setCalculando(false)
     }
