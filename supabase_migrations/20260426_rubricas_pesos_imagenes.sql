@@ -16,6 +16,59 @@ alter table public.criterio
   add constraint criterio_tipo_check
   check (tipo in ('numerico', 'radio', 'checklist', 'comentario', 'rubrica'));
 
+-- Imagen por competición
+alter table public.competicion
+  add column if not exists imagen_url text;
+
+-- Horas de apertura/cierre para encuestas programadas
+alter table public.encuesta
+  add column if not exists hora_apertura timestamptz,
+  add column if not exists hora_cierre timestamptz,
+  add column if not exists hora_reapertura timestamptz;
+
+-- Añadir estado 'programada' al check de encuesta.estado
+alter table public.encuesta
+  drop constraint if exists encuesta_estado_check;
+
+alter table public.encuesta
+  add constraint encuesta_estado_check
+  check (estado in ('borrador', 'abierta', 'programada', 'cerrada'));
+
+alter table public.encuesta
+  drop constraint if exists encuesta_horario_orden_check,
+  drop constraint if exists encuesta_programada_apertura_check;
+
+alter table public.encuesta
+  add constraint encuesta_horario_orden_check
+    check (hora_cierre is null or hora_apertura is null or hora_cierre > hora_apertura),
+  add constraint encuesta_programada_apertura_check
+    check (estado <> 'programada' or hora_apertura is not null);
+
+create or replace function public.procesar_encuestas_programadas()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.encuesta
+  set estado = 'abierta',
+      hora_apertura = now()
+  where estado = 'programada'
+    and hora_apertura is not null
+    and hora_apertura <= now();
+
+  update public.encuesta
+  set estado = 'cerrada',
+      hora_cierre = now()
+  where estado in ('abierta', 'programada')
+    and hora_cierre is not null
+    and hora_cierre <= now();
+end;
+$$;
+
+grant execute on function public.procesar_encuestas_programadas() to authenticated, anon;
+
 insert into storage.buckets (id, name, public)
 values ('eventos', 'eventos', true)
 on conflict (id) do update set public = true;

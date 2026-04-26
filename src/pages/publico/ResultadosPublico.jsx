@@ -9,6 +9,7 @@ import { supabase } from '../../lib/supabase'
 // Spinner de carga mientras se obtienen los resultados iniciales
 import Spinner from '../../components/ui/Spinner'
 import { TIPOS_PUNTUABLES, calcularPuntajePonderado } from '../../utils/scoring'
+import { procesarEncuestasProgramadas } from '../../utils/scheduledSurveys'
 
 // Página de resultados en tiempo real: muestra el ranking de proyectos actualizado automáticamente
 export default function ResultadosPublico() {
@@ -123,6 +124,7 @@ export default function ResultadosPublico() {
     let channel
 
     async function init() {
+      await procesarEncuestasProgramadas()
       // Consulta 'encuesta' buscando por código de sala e incluyendo datos de competición y evento
       const { data: enc, error } = await supabase
         .from('encuesta')

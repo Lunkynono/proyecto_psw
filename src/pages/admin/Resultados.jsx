@@ -1,22 +1,25 @@
-// Página de resultados de encuesta — ruta /admin/encuestas/:id/resultados
+
 // Permite al admin:
 // - Ver el estado de la encuesta (borrador/abierta/cerrada) y cambiarlo
 // - Calcular el ranking de proyectos a partir de los votos registrados
-// - Editar manualmente el puntaje de cualquier proyecto (intervención manual)
+
 // - Ver los comentarios cualitativos agrupados por proyecto
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { Calculator, Edit2, Check, X } from 'lucide-react'
+import { Calculator, Edit2, Check, X, Clock, Pencil } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
 import Layout from '../../components/layout/Layout'
 import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
+import Modal from '../../components/ui/Modal'
 import Spinner from '../../components/ui/Spinner'
 import { TIPOS_PUNTUABLES, calcularPuntajePonderado } from '../../utils/scoring'
+import { DATETIME_INPUT_CLASS, datetimeLocalMasMinutos, datetimeLocalToIso, etiquetaApertura, etiquetaCierre, formatFechaLocal, isoToDatetimeLocal, limitarDatetimeLocal, nowDatetimeLocal, validarHorarioEncuesta } from '../../utils/dateTime'
+import { procesarEncuestasProgramadas } from '../../utils/scheduledSurveys'
 
-// Las dos pestañas de la página
+
 const TABS = ['Ranking', 'Comentarios']
 
 export default function Resultados() {
@@ -24,21 +27,41 @@ export default function Resultados() {
   const { user } = useAuthStore()
   const [encuesta, setEncuesta] = useState(null)
   const [resultados, setResultados] = useState([])   // Ranking calculado de proyectos
-  const [comentarios, setComentarios] = useState([]) // Comentarios de público y jurado
+  const [comentarios, setComentarios] = useState([])
   const [cargando, setCargando] = useState(true)
   const [calculando, setCalculando] = useState(false)
   const [tab, setTab] = useState(0)
-  const [editando, setEditando] = useState(null)      // ID del resultado que se está editando manualmente
+  const [editando, setEditando] = useState(null)
   const [valorManual, setValorManual] = useState('')  // Valor introducido manualmente
   const [estado, setEstado] = useState('')            // Estado actual de la encuesta
   const [cambiandoEstado, setCambiandoEstado] = useState(false)
+  const [modalAbrir, setModalAbrir] = useState(false)
+  const [horaApertura, setHoraApertura] = useState('')
+  const [horaCierre, setHoraCierre] = useState('')
 
   useEffect(() => { cargarDatos() }, [encuestaId])
 
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      await procesarEncuestasProgramadas({ encuestaId })
+      const { data } = await supabase
+        .from('encuesta')
+        .select('*, competicion(nombre, evento(organizador_id, nombre, id))')
+        .eq('id', encuestaId)
+        .single()
+      if (data) {
+        setEncuesta(data)
+        setEstado(data.estado)
+      }
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [encuestaId])
+
     // Carga la encuesta, el ranking almacenado y los comentarios cualitativos
   async function cargarDatos() {
+    await procesarEncuestasProgramadas({ encuestaId })
     try {
-      // Trae la encuesta con su competición y evento para el breadcrumb y control de acceso
+
       const { data: enc, error: e1 } = await supabase
         .from('encuesta')
         .select('*, competicion(nombre, evento(organizador_id, nombre, id))')
@@ -62,7 +85,7 @@ export default function Resultados() {
 
       setResultados(res || [])
 
-      // Comentarios del público (tabla respuesta_criterio_publico con join a voto_publico)
+
       const { data: comsPub } = await supabase
         .from('respuesta_criterio_publico')
         .select('valor_texto, criterio(tipo, titulo), voto_publico!inner(encuesta_id, proyecto(nombre))')
@@ -90,12 +113,12 @@ export default function Resultados() {
   }
 
     // Calcula el ranking de proyectos a partir de los votos registrados
-  // Fórmula: para cada proyecto, promedia los valores numéricos por criterio y los pondera
+
   // Almacena los resultados en la tabla 'resultado' con upsert
   const calcularResultados = async () => {
     setCalculando(true)
     try {
-      // Obtiene todos los proyectos de la competición asociada a la encuesta
+
       const { data: equipos, error: equiposError } = await supabase
         .from('equipo')
         .select('proyecto(*)')
@@ -109,7 +132,7 @@ export default function Resultados() {
         throw new Error('No hay proyectos en esta competición')
       }
 
-      // Obtiene los criterios numéricos de la encuesta con sus pesos
+
       const { data: encCriterios, error: critError } = await supabase
         .from('encuesta_criterio')
         .select('criterio(id, peso, tipo, criterio_opcion(*))')
@@ -127,7 +150,7 @@ export default function Resultados() {
       // Calcula el puntaje proyecto a proyecto
       const puntajes = await Promise.all(
         proyectos.map(async (proyecto) => {
-          // Contar votos del público y del jurado para este proyecto
+
           const [{ count: votosPublico }, { count: votosJuez }] = await Promise.all([
             supabase
               .from('voto_publico')
@@ -146,7 +169,7 @@ export default function Resultados() {
 
           let puntaje = 0
 
-          // Si hay criterios numéricos, calcular media ponderada
+
           if (criteriosPuntuables.length > 0 && sumaPesos > 0) {
             const [{ data: respuestasPublico }, { data: respuestasJuez }] = await Promise.all([
               supabase
@@ -169,7 +192,7 @@ export default function Resultados() {
 
             puntaje = calcularPuntajePonderado(criteriosPuntuables, todasLasRespuestas) ?? 0
           } else {
-            // Si no hay criterios numéricos, usar el número de votos como puntaje
+
             puntaje = votosTotales
           }
 
@@ -189,7 +212,7 @@ export default function Resultados() {
           encuesta_id: Number(encuestaId),
           proyecto_id: puntajes[i].proyecto_id,
           puntaje_calculado: puntajes[i].puntaje,
-          posicion_final: i + 1,               // Posición en el ranking (1 = primero)
+          posicion_final: i + 1,
           calculado_en: new Date().toISOString()
         }, { onConflict: 'encuesta_id,proyecto_id' })
 
@@ -205,8 +228,8 @@ export default function Resultados() {
     }
   }
 
-  // Guarda un puntaje manual para un resultado (intervención del admin)
-  // El puntaje manual tiene prioridad sobre el calculado en la visualización
+
+
   const guardarManual = async (resId) => {
     try {
       const { error } = await supabase.from('resultado').update({
@@ -221,13 +244,23 @@ export default function Resultados() {
     }
   }
 
-  // Cambia el estado de la encuesta: borrador → abierta → cerrada
   const cambiarEstado = async (nuevoEstado) => {
+    if (nuevoEstado === 'cerrada' && encuesta?.hora_cierre && new Date(encuesta.hora_cierre) > new Date()) {
+      const ok = window.confirm('Esta encuesta tiene un cierre automático programado. ¿Cerrarla ahora de todas formas?')
+      if (!ok) return
+    }
     setCambiandoEstado(true)
     try {
-      const { error } = await supabase.from('encuesta').update({ estado: nuevoEstado }).eq('id', encuestaId)
+      const cambioReal = new Date().toISOString()
+      const payload = nuevoEstado === 'cerrada'
+        ? { estado: nuevoEstado, hora_cierre: cambioReal }
+        : nuevoEstado === 'abierta'
+          ? { estado: nuevoEstado, hora_apertura: cambioReal, hora_cierre: null }
+          : { estado: nuevoEstado }
+      const { error } = await supabase.from('encuesta').update(payload).eq('id', encuestaId)
       if (error) throw error
       setEstado(nuevoEstado)
+      setEncuesta(prev => ({ ...prev, ...payload }))
       toast.success(`Encuesta ${nuevoEstado}`)
     } catch (err) {
       toast.error(err.message)
@@ -236,30 +269,123 @@ export default function Resultados() {
     }
   }
 
+  const confirmarAbrir = async () => {
+    const errorHorario = validarHorarioEncuesta({
+      apertura: horaApertura,
+      cierre: horaCierre,
+      editarApertura: estado !== 'abierta'
+    })
+    if (errorHorario) {
+      toast.error(errorHorario)
+      return
+    }
+    setCambiandoEstado(true)
+    try {
+      let payload
+      if (estado === 'abierta') {
+        // Encuesta ya abierta: solo actualizar hora de cierre, sin tocar estado ni apertura
+        payload = { hora_cierre: datetimeLocalToIso(horaCierre) }
+      } else {
+        const horaAperturaIso = datetimeLocalToIso(horaApertura)
+        const horaCierreIso = datetimeLocalToIso(horaCierre)
+        const aperturaFutura = horaAperturaIso && new Date(horaAperturaIso) > new Date()
+        payload = aperturaFutura
+          ? { estado: 'programada', hora_apertura: horaAperturaIso, hora_cierre: horaCierreIso }
+          : { estado: 'abierta', hora_apertura: new Date().toISOString(), hora_cierre: horaCierreIso }
+      }
+      const { error } = await supabase.from('encuesta').update(payload).eq('id', encuestaId)
+      if (error) throw error
+      if (payload.estado) setEstado(payload.estado)
+      setEncuesta(prev => ({ ...prev, ...payload }))
+      setModalAbrir(false)
+      setHoraApertura('')
+      setHoraCierre('')
+      toast.success(payload.estado === 'programada' ? 'Encuesta programada' : 'Guardado')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setCambiandoEstado(false)
+    }
+  }
+
+  const reabrir = async () => {
+    setCambiandoEstado(true)
+    try {
+      const reaperturaReal = new Date().toISOString()
+      const payload = { estado: 'abierta', hora_apertura: reaperturaReal, hora_reapertura: reaperturaReal, hora_cierre: null }
+
+      if (encuesta?.hora_cierre && new Date(encuesta.hora_cierre) <= new Date()) {
+        payload.hora_cierre = null
+      }
+      const { error } = await supabase.from('encuesta').update(payload).eq('id', encuestaId)
+      if (error) throw error
+      setEstado('abierta')
+      setEncuesta(prev => ({ ...prev, ...payload }))
+      toast.success('Encuesta reabierta')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setCambiandoEstado(false)
+    }
+  }
+
+  const abrirModalHorario = () => {
+
+    if (estado !== 'abierta') {
+      setHoraApertura(isoToDatetimeLocal(encuesta?.hora_apertura))
+    } else {
+      setHoraApertura('')
+    }
+    setHoraCierre(isoToDatetimeLocal(encuesta?.hora_cierre))
+    setModalAbrir(true)
+  }
+
   if (cargando) return <Layout><div className="flex justify-center py-12"><Spinner /></div></Layout>
 
   // El proyecto con mayor puntaje se usa como referencia para las barras de progreso
   const maxPuntaje = Math.max(...resultados.map(r => parseFloat(r.puntaje_manual ?? r.puntaje_calculado ?? 0)), 1)
+  const errorHorarioModal = validarHorarioEncuesta({
+    apertura: horaApertura,
+    cierre: horaCierre,
+    editarApertura: estado !== 'abierta'
+  })
 
   return (
     <Layout>
       <div className="max-w-3xl mx-auto">
-        {/* Cabecera: nombre de la encuesta, competición, evento y controles de estado */}
-        <div className="flex items-start justify-between mb-4">
-          <div>
+
+        <div className="flex items-start justify-between mb-4 gap-3">
+          <div className="min-w-0">
             <h1 className="text-xl font-bold text-gray-900">{encuesta?.nombre}</h1>
-            <p className="text-sm text-gray-500">{encuesta?.competicion?.nombre} · {encuesta?.competicion?.evento?.nombre}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Badge de estado coloreado según el valor */}
-            <Badge color={estado === 'abierta' ? 'green' : estado === 'cerrada' ? 'red' : 'gray'}>{estado}</Badge>
-            {/* Botón para abrir la encuesta (solo visible si está en borrador) */}
-            {estado === 'borrador' && (
-              <Button size="sm" loading={cambiandoEstado} onClick={() => cambiarEstado('abierta')}>Abrir</Button>
+            <p className="text-sm text-gray-500">{encuesta?.competicion?.nombre} - {encuesta?.competicion?.evento?.nombre}</p>
+            {(encuesta?.hora_reapertura || encuesta?.hora_apertura || encuesta?.hora_cierre) && (
+              <p className="text-xs text-gray-400 mt-0.5">
+                {encuesta.hora_reapertura ? <span>Reabierta: {formatFechaLocal(encuesta.hora_reapertura)}</span> : encuesta.hora_apertura && <span>{etiquetaApertura(encuesta.hora_apertura)}: {formatFechaLocal(encuesta.hora_apertura)}</span>}
+                {(encuesta.hora_reapertura || encuesta.hora_apertura) && encuesta.hora_cierre && <span> · </span>}
+                {encuesta.hora_cierre && <span>{etiquetaCierre(encuesta.hora_cierre)}: {formatFechaLocal(encuesta.hora_cierre)}</span>}
+              </p>
             )}
-            {/* Botón para cerrar la encuesta (solo visible si está abierta) */}
-            {estado === 'abierta' && (
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Badge color={estado === 'abierta' ? 'green' : estado === 'cerrada' ? 'red' : estado === 'programada' ? 'yellow' : 'gray'}>{estado}</Badge>
+            {estado === 'borrador' && (
+              <Button size="sm" onClick={abrirModalHorario}>Abrir</Button>
+            )}
+            {estado === 'abierta' && (<>
+              <button onClick={abrirModalHorario} title="Programar cierre automático"
+                className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 border border-gray-200 transition-colors">
+                <Clock size={14} />
+              </button>
               <Button size="sm" variant="danger" loading={cambiandoEstado} onClick={() => cambiarEstado('cerrada')}>Cerrar</Button>
+            </>)}
+            {estado === 'programada' && (
+              <button onClick={abrirModalHorario}
+                className="flex items-center gap-1.5 text-sm text-indigo-600 hover:text-indigo-800 font-medium transition-colors">
+                <Pencil size={13} /> Editar horario
+              </button>
+            )}
+            {estado === 'cerrada' && (
+              <Button size="sm" variant="secondary" loading={cambiandoEstado} onClick={reabrir}>Reabrir</Button>
             )}
           </div>
         </div>
@@ -274,11 +400,11 @@ export default function Resultados() {
           ))}
         </div>
 
-        {/* PESTAÑA 0: Ranking de proyectos */}
+
         {tab === 0 && (
           <div>
             <div className="flex justify-end mb-4">
-              {/* Botón para recalcular el ranking a partir de los votos actuales */}
+
               <Button onClick={calcularResultados} loading={calculando}>
                 <Calculator size={16} /> Calcular resultados
               </Button>
@@ -301,7 +427,7 @@ export default function Resultados() {
                     <div key={r.id} className="bg-white border border-gray-200 rounded-xl p-4">
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-3">
-                          {/* Número de posición en el ranking */}
+
                           <span className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 text-sm font-bold flex items-center justify-center">
                             {r.posicion_final}
                           </span>
@@ -313,7 +439,7 @@ export default function Resultados() {
                         <div className="flex items-center gap-2">
                           {/* Badge amarillo si el puntaje fue modificado manualmente */}
                           {esManual && <Badge color="yellow">manual</Badge>}
-                          {/* Modo edición de puntaje manual */}
+
                           {editando === r.id ? (
                             <div className="flex items-center gap-1">
                               <input type="number" step="0.01" value={valorManual} onChange={e => setValorManual(e.target.value)}
@@ -324,7 +450,7 @@ export default function Resultados() {
                           ) : (
                             <>
                               <span className="font-bold text-gray-700">{puntaje.toFixed(2)}</span>
-                              {/* Botón para activar el modo de edición manual */}
+
                               <button onClick={() => { setEditando(r.id); setValorManual(r.puntaje_manual ?? '') }} className="text-gray-400 hover:text-indigo-600">
                                 <Edit2 size={14} />
                               </button>
@@ -332,7 +458,7 @@ export default function Resultados() {
                           )}
                         </div>
                       </div>
-                      {/* Barra de progreso proporcional al máximo puntaje */}
+
                       <div className="w-full bg-gray-100 rounded-full h-2">
                         <div className="bg-indigo-500 h-2 rounded-full transition-all" style={{ width: `${(puntaje / maxPuntaje) * 100}%` }} />
                       </div>
@@ -344,7 +470,7 @@ export default function Resultados() {
           </div>
         )}
 
-        {/* PESTAÑA 1: Comentarios cualitativos agrupados por proyecto */}
+
         {tab === 1 && (
           <div className="space-y-4">
             {comentarios.length === 0 ? (
@@ -364,7 +490,7 @@ export default function Resultados() {
                   <div className="space-y-2">
                     {coms.map((c, i) => (
                       <div key={i} className="flex items-start gap-2">
-                        {/* Badge azul para comentarios del público, morado para los del jurado */}
+
                         <Badge color={c.origen === 'Público' ? 'blue' : 'purple'}>{c.origen}</Badge>
                         <p className="text-sm text-gray-600">{c.valor_texto}</p>
                       </div>
@@ -376,6 +502,83 @@ export default function Resultados() {
           </div>
         )}
       </div>
+
+      <Modal
+        open={modalAbrir}
+        onClose={() => { setModalAbrir(false); setHoraApertura(''); setHoraCierre('') }}
+        title={estado === 'abierta' ? 'Cierre automático' : estado === 'programada' ? 'Editar horario' : 'Abrir encuesta'}
+      >
+        <div className="space-y-3">
+          <div className={estado !== 'abierta' ? 'grid grid-cols-2 gap-3' : ''}>
+            {estado !== 'abierta' && (
+              <div className="rounded-xl border border-gray-200 p-3 space-y-2">
+                <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                  <span className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0" />
+                  Apertura
+                </div>
+                <input
+                  type="datetime-local"
+                  value={horaApertura}
+                  min={nowDatetimeLocal()}
+                  onChange={e => {
+                    const apertura = limitarDatetimeLocal(e.target.value, nowDatetimeLocal())
+                    setHoraApertura(apertura)
+                    if (horaCierre) setHoraCierre(limitarDatetimeLocal(horaCierre, datetimeLocalMasMinutos(apertura)))
+                  }}
+                  className={DATETIME_INPUT_CLASS}
+                />
+                {horaApertura && (
+                  <button onClick={() => setHoraApertura('')} className="text-xs text-gray-400 hover:text-gray-600">
+                    Quitar
+                  </button>
+                )}
+              </div>
+            )}
+            <div className="rounded-xl border border-gray-200 p-3 space-y-2">
+              <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                <span className="w-2 h-2 rounded-full bg-red-400 flex-shrink-0" />
+                Cierre
+              </div>
+              <input
+                type="datetime-local"
+                value={horaCierre}
+                min={horaApertura ? datetimeLocalMasMinutos(horaApertura) : nowDatetimeLocal()}
+                onChange={e => setHoraCierre(limitarDatetimeLocal(e.target.value, horaApertura ? datetimeLocalMasMinutos(horaApertura) : nowDatetimeLocal()))}
+                className={DATETIME_INPUT_CLASS}
+              />
+              {horaCierre && (
+                <button onClick={() => setHoraCierre('')} className="text-xs text-gray-400 hover:text-gray-600">
+                  Quitar
+                </button>
+              )}
+            </div>
+          </div>
+          {estado !== 'abierta' && (
+            <p className="text-xs text-gray-400">
+              Deja vacío para abrir ahora sin cierre automático. Con apertura futura, queda programada hasta esa hora.
+            </p>
+          )}
+
+          {errorHorarioModal && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">
+              {errorHorarioModal}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="secondary" onClick={() => { setModalAbrir(false); setHoraApertura(''); setHoraCierre('') }}>
+              Cancelar
+            </Button>
+            <Button
+              loading={cambiandoEstado}
+              onClick={confirmarAbrir}
+              disabled={!!errorHorarioModal}
+            >
+              {estado !== 'abierta' && horaApertura && new Date(horaApertura) > new Date() ? 'Programar' : 'Guardar'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </Layout>
   )
 }
+

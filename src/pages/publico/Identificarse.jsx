@@ -8,6 +8,7 @@ import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
 // Cliente de Supabase para verificar la sala y comprobar votos previos
 import { supabase } from '../../lib/supabase'
+import { procesarEncuestasProgramadas } from '../../utils/scheduledSurveys'
 // Spinner de carga mientras se obtienen los datos de la sala
 import Spinner from '../../components/ui/Spinner'
 
@@ -29,6 +30,7 @@ export default function Identificarse() {
   // Al montar el componente, cargamos los datos de la sala usando el código de la URL
   useEffect(() => {
     async function cargar() {
+      await procesarEncuestasProgramadas()
       // Consulta la tabla 'encuesta' buscando por código de sala e incluyendo el nombre de la competición
       const { data, error } = await supabase
         .from('encuesta')

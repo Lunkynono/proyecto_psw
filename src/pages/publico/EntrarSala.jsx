@@ -8,6 +8,7 @@ import { Vote, TrendingUp } from 'lucide-react'
 import toast from 'react-hot-toast'
 // Cliente de Supabase para buscar la encuesta por código de sala
 import { supabase } from '../../lib/supabase'
+import { procesarEncuestasProgramadas } from '../../utils/scheduledSurveys'
 
 // Primera página del flujo público: el usuario introduce el código de sala para votar o ver resultados
 export default function EntrarSala() {
@@ -21,6 +22,7 @@ export default function EntrarSala() {
 
   // Busca una encuesta en Supabase usando el código de sala introducido
   const buscarEncuesta = async (cod) => {
+    await procesarEncuestasProgramadas()
     // Consulta la tabla 'encuesta' filtrando por el campo 'codigo_sala'
     const { data: encuesta, error } = await supabase
       .from('encuesta')

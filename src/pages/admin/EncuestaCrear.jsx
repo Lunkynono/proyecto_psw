@@ -17,6 +17,7 @@ import Modal from '../../components/ui/Modal'
 import Badge from '../../components/ui/Badge'
 import Spinner from '../../components/ui/Spinner'
 import { RUBRICA_NIVELES, TIPOS_CON_OPCIONES, ajustarPesoOpcion, construirOpcionesRubrica, opcionesConTexto, pesosOpcionesValidos, reescalarPesosOpciones } from '../../utils/scoring'
+import { DATETIME_INPUT_CLASS, datetimeLocalMasMinutos, datetimeLocalToIso, limitarDatetimeLocal, nowDatetimeLocal, validarHorarioEncuesta } from '../../utils/dateTime'
 
 // Etiquetas y colores de los tipos de criterio para los badges
 const TIPO_LABELS = { numerico: 'Numerico', radio: 'Radio', checklist: 'Checklist', rubrica: 'Rubrica', comentario: 'Comentario' }
@@ -32,6 +33,9 @@ export default function EncuestaCrear() {
   const [criteriosSeleccionados, setCriteriosSeleccionados] = useState([])  // IDs de criterios seleccionados
   const [cargando, setCargando] = useState(true)
   const [guardando, setGuardando] = useState(false)
+  const [accionGuardar, setAccionGuardar] = useState('activar')
+  const [horaApertura, setHoraApertura] = useState('')
+  const [horaCierre, setHoraCierre] = useState('')
   const [modalCriterio, setModalCriterio] = useState(false)
   const [guardandoCriterio, setGuardandoCriterio] = useState(false)
 
@@ -46,6 +50,7 @@ export default function EncuestaCrear() {
   const { register, handleSubmit, formState: { errors } } = useForm({
     defaultValues: { tipo_votante: 'juez', peso: 1.0 }
   })
+  const errorHorario = validarHorarioEncuesta({ apertura: horaApertura, cierre: horaCierre })
 
   useEffect(() => { cargarDatos() }, [competicionId])
 
@@ -153,7 +158,17 @@ export default function EncuestaCrear() {
   }
 
   // Crea la encuesta con los criterios seleccionados
-  const onSubmit = async (data) => {
+  const onSubmit = async (data, modo = 'activar') => {
+    const esBorrador = modo === 'borrador'
+    setAccionGuardar(modo)
+    const errorHorarioSubmit = esBorrador
+      ? ''
+      : validarHorarioEncuesta({ apertura: horaApertura, cierre: horaCierre })
+    if (errorHorarioSubmit) {
+      toast.error(errorHorarioSubmit)
+      return
+    }
+
     let seleccionados = [...criteriosSeleccionados]
 
     // Regla UT 3266: toda encuesta debe tener al menos un criterio de tipo 'comentario'
@@ -172,6 +187,15 @@ export default function EncuestaCrear() {
 
     setGuardando(true)
     try {
+      const horaAperturaIso = esBorrador ? null : datetimeLocalToIso(horaApertura)
+      const horaCierreIso = esBorrador ? null : datetimeLocalToIso(horaCierre)
+      const estadoEncuesta = esBorrador
+        ? 'borrador'
+        : horaAperturaIso
+          ? 'programada'
+          : 'abierta'
+      const horaAperturaReal = estadoEncuesta === 'abierta' ? new Date().toISOString() : horaAperturaIso
+
       // PASO 1: Crea la encuesta
       const { data: encuesta, error } = await supabase.from('encuesta').insert({
         competicion_id: Number(competicionId),
@@ -179,7 +203,10 @@ export default function EncuestaCrear() {
         descripcion: data.descripcion || null,
         tipo_votante: data.tipo_votante,  // 'juez', 'publico' o 'ambos'
         peso: parseFloat(data.peso) || 1.0,
-        creador_id: user.id
+        creador_id: user.id,
+        estado: estadoEncuesta,
+        hora_apertura: horaAperturaReal,
+        hora_cierre: horaCierreIso
       }).select().single()
       if (error) throw error
 
@@ -190,7 +217,7 @@ export default function EncuestaCrear() {
         )
       }
 
-      toast.success('Encuesta creada')
+      toast.success(esBorrador ? 'Borrador guardado' : estadoEncuesta === 'programada' ? 'Encuesta programada' : 'Encuesta abierta')
       navigate(`/admin/competiciones/${competicionId}`)
     } catch (err) {
       toast.error(err.message)
@@ -216,6 +243,31 @@ export default function EncuestaCrear() {
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+          <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+            <h2 className="font-semibold text-gray-700">Horario</h2>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Apertura</label>
+                <input type="datetime-local" min={nowDatetimeLocal()} value={horaApertura}
+                  onChange={e => {
+                    const apertura = limitarDatetimeLocal(e.target.value, nowDatetimeLocal())
+                    setHoraApertura(apertura)
+                    if (horaCierre) setHoraCierre(limitarDatetimeLocal(horaCierre, datetimeLocalMasMinutos(apertura)))
+                  }}
+                  className={DATETIME_INPUT_CLASS} />
+                {horaApertura && <button type="button" onClick={() => setHoraApertura('')} className="mt-1 text-xs text-gray-400 hover:text-gray-600">Quitar</button>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cierre</label>
+                <input type="datetime-local" min={horaApertura ? datetimeLocalMasMinutos(horaApertura) : nowDatetimeLocal()} value={horaCierre}
+                  onChange={e => setHoraCierre(limitarDatetimeLocal(e.target.value, horaApertura ? datetimeLocalMasMinutos(horaApertura) : nowDatetimeLocal()))}
+                  className={DATETIME_INPUT_CLASS} />
+                {horaCierre && <button type="button" onClick={() => setHoraCierre('')} className="mt-1 text-xs text-gray-400 hover:text-gray-600">Quitar</button>}
+              </div>
+            </div>
+            <p className="text-xs text-gray-400">Si dejas la apertura vacia, la encuesta se abre al crearla. Guardar borrador no activa ni programa la encuesta.</p>
+            {errorHorario && <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">{errorHorario}</div>}
+          </div>
           {/* Información básica de la encuesta */}
           <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
             <h2 className="font-semibold text-gray-700">Información de la encuesta</h2>
@@ -247,7 +299,6 @@ export default function EncuestaCrear() {
             </div>
           </div>
 
-          {/* Selección de criterios de evaluación */}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-semibold text-gray-700">Criterios de evaluación</h2>
@@ -294,7 +345,12 @@ export default function EncuestaCrear() {
 
           <div className="flex justify-end gap-3">
             <Button type="button" variant="secondary" onClick={() => navigate(`/admin/competiciones/${competicionId}`)}>Cancelar</Button>
-            <Button type="submit" loading={guardando}>Crear encuesta</Button>
+            <Button type="button" variant="secondary" loading={guardando && accionGuardar === 'borrador'} onClick={handleSubmit(data => onSubmit(data, 'borrador'))}>
+              Guardar borrador
+            </Button>
+            <Button type="button" loading={guardando && accionGuardar === 'activar'} disabled={!!errorHorario} onClick={handleSubmit(data => onSubmit(data, 'activar'))}>
+              {horaApertura ? 'Programar encuesta' : 'Crear y abrir'}
+            </Button>
           </div>
         </form>
       </div>

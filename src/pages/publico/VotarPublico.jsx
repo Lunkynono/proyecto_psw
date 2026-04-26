@@ -13,6 +13,7 @@ import { VotantePublicoCreator } from '../../factories/creators/VotantePublicoCr
 // Spinner de carga mientras se obtienen datos de la encuesta
 import Spinner from '../../components/ui/Spinner'
 import { RUBRICA_NIVELES, agruparRubrica, ordenarOpciones } from '../../utils/scoring'
+import { procesarEncuestasProgramadas } from '../../utils/scheduledSurveys'
 
 // Tercera página del flujo público: muestra todos los proyectos con sus criterios para que el público vote
 export default function VotarPublico() {
@@ -58,6 +59,7 @@ export default function VotarPublico() {
   // Carga en paralelo la encuesta y sus criterios, luego obtiene los proyectos de la competición
   async function cargarDatos(encuestaId) {
     try {
+      await procesarEncuestasProgramadas({ encuestaId })
       // Dos consultas en paralelo para optimizar el tiempo de carga
       const [encuestaRes, criteriosRes] = await Promise.all([
         // Consulta 'encuesta' con el nombre e ID de la competición para obtener los proyectos
@@ -187,6 +189,18 @@ export default function VotarPublico() {
   setEnviando(true)
 
   try {
+    await procesarEncuestasProgramadas({ encuestaId: encuesta.id })
+    const { data: estadoActual } = await supabase
+      .from('encuesta')
+      .select('estado')
+      .eq('id', encuesta.id)
+      .single()
+    if (estadoActual?.estado !== 'abierta') {
+      toast.error('Esta votacion ya no esta disponible')
+      navigate(`/sala/${codigo}`)
+      return
+    }
+
     const creator = new VotantePublicoCreator(supabase)
     const votante = creator.crear()
 
@@ -343,9 +357,9 @@ export default function VotarPublico() {
                                     }))}
                                   />
                                   <span>
-                                    <span className="block">{nivel.label}</span>
+                                    {!opcion?.descriptor && <span className="block">{nivel.label}</span>}
                                     {opcion?.descriptor && (
-                                      <span className="mt-1 block text-[11px] font-normal leading-snug text-gray-600">
+                                      <span className="block text-[11px] font-normal leading-snug text-gray-600">
                                         {opcion.descriptor}
                                       </span>
                                     )}

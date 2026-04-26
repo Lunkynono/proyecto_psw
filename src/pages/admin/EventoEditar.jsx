@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
-import { Plus, ChevronRight } from 'lucide-react'
+import { Plus, ChevronRight, Camera } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
@@ -31,6 +31,7 @@ export default function EventoEditar() {
   const [modalCompeticion, setModalCompeticion] = useState(false)
   // Estado del formulario del modal de nueva competición
   const [nuevaComp, setNuevaComp] = useState({ nombre: '', descripcion: '' })
+  const [subiendoImagenComp, setSubiendoImagenComp] = useState(null)
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm()
 
@@ -99,6 +100,21 @@ export default function EventoEditar() {
       toast.success('Competición añadida')
     } catch (err) {
       toast.error(err.message)
+    }
+  }
+
+  const guardarImagenComp = async (comp, file) => {
+    setSubiendoImagenComp(comp.id)
+    try {
+      const url = await subirImagenEvento(supabase, file, user.id)
+      const { error } = await supabase.from('competicion').update({ imagen_url: url }).eq('id', comp.id)
+      if (error) throw error
+      setCompeticiones(prev => prev.map(c => c.id === comp.id ? { ...c, imagen_url: url } : c))
+      toast.success('Imagen guardada')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setSubiendoImagenComp(null)
     }
   }
 
@@ -191,31 +207,55 @@ export default function EventoEditar() {
               </Button>
             </div>
             {competiciones.map(comp => (
-              <div key={comp.id} className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
-                <div className="flex justify-between items-start">
-                  <div className="flex-1 space-y-2">
-                    {/* Input de nombre: se guarda al perder el foco */}
-                    <input
-                      defaultValue={comp.nombre}
-                      onBlur={e => guardarCompeticion({ ...comp, nombre: e.target.value })}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                      placeholder="Nombre"
-                    />
-                    {/* Input de descripción: se guarda al perder el foco */}
-                    <input
-                      defaultValue={comp.descripcion || ''}
-                      onBlur={e => guardarCompeticion({ ...comp, descripcion: e.target.value })}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                      placeholder="Descripción (opcional)"
-                    />
+              <div key={comp.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                <div className="flex items-stretch">
+                  {/* Miniatura de imagen a la izquierda */}
+                  <label className="relative flex-shrink-0 w-20 min-h-[80px] cursor-pointer group">
+                    {subiendoImagenComp === comp.id ? (
+                      <div className="h-full w-20 min-h-[80px] bg-gray-100 flex items-center justify-center">
+                        <div className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    ) : comp.imagen_url ? (
+                      <img src={comp.imagen_url} alt={comp.nombre} className="h-full w-20 min-h-[80px] object-cover" />
+                    ) : (
+                      <div className="h-full w-20 min-h-[80px] bg-gray-100 flex items-center justify-center">
+                        <Camera size={16} className="text-gray-400" />
+                      </div>
+                    )}
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity rounded-l-xl">
+                      <Camera size={16} className="text-white" />
+                    </div>
+                    <input type="file" accept="image/*" className="sr-only" onChange={e => {
+                      const file = e.target.files?.[0]
+                      if (file) guardarImagenComp(comp, file)
+                      e.target.value = ''
+                    }} />
+                  </label>
+                  {/* Contenido de la competición */}
+                  <div className="flex-1 p-4">
+                    <div className="flex justify-between items-start gap-3">
+                      <div className="flex-1 space-y-2">
+                        <input
+                          defaultValue={comp.nombre}
+                          onBlur={e => guardarCompeticion({ ...comp, nombre: e.target.value })}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          placeholder="Nombre"
+                        />
+                        <input
+                          defaultValue={comp.descripcion || ''}
+                          onBlur={e => guardarCompeticion({ ...comp, descripcion: e.target.value })}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          placeholder="Descripción (opcional)"
+                        />
+                      </div>
+                      <Link
+                        to={`/admin/competiciones/${comp.id}`}
+                        className="flex items-center gap-1 text-sm text-indigo-600 hover:underline whitespace-nowrap"
+                      >
+                        Ver detalle <ChevronRight size={14} />
+                      </Link>
+                    </div>
                   </div>
-                  {/* Link al detalle completo de la competición (equipos, criterios, encuestas, jurado) */}
-                  <Link
-                    to={`/admin/competiciones/${comp.id}`}
-                    className="ml-3 flex items-center gap-1 text-sm text-indigo-600 hover:underline whitespace-nowrap"
-                  >
-                    Ver detalle <ChevronRight size={14} />
-                  </Link>
                 </div>
               </div>
             ))}

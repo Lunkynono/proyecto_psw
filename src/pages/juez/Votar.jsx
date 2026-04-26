@@ -19,6 +19,7 @@ import Layout from '../../components/layout/Layout'
 import Button from '../../components/ui/Button'
 import Spinner from '../../components/ui/Spinner'
 import { RUBRICA_NIVELES, agruparRubrica, ordenarOpciones } from '../../utils/scoring'
+import { procesarEncuestasProgramadas } from '../../utils/scheduledSurveys'
 
 // Página de evaluación: permite al juez votar un proyecto concreto dentro de una encuesta
 export default function Votar() {
@@ -50,6 +51,7 @@ export default function Votar() {
   // Carga en paralelo los datos de la encuesta, el proyecto y sus criterios de evaluación
   async function cargarDatos() {
     try {
+      await procesarEncuestasProgramadas({ encuestaId })
       // Tres consultas en paralelo para optimizar el tiempo de carga
       const [{ data: enc }, { data: proy }, { data: encCrits }] = await Promise.all([
         // Consulta 'encuesta' con datos de la competición para mostrar el contexto
@@ -60,6 +62,10 @@ export default function Votar() {
         // incluyendo las opciones de cada criterio (para radio y checklist)
         supabase.from('encuesta_criterio').select('criterio(*, criterio_opcion(*))').eq('encuesta_id', encuestaId)
       ])
+      if (!enc || enc.estado !== 'abierta') {
+        toast.error('Esta encuesta ya no esta abierta')
+        return navigate('/juez')
+      }
       setEncuesta(enc)
       setProyecto(proy)
       // Extraemos los objetos criterio de la relación y eliminamos posibles valores nulos
@@ -106,6 +112,18 @@ export default function Votar() {
   setEnviando(true)
 
   try {
+    await procesarEncuestasProgramadas({ encuestaId })
+    const { data: estadoActual } = await supabase
+      .from('encuesta')
+      .select('estado')
+      .eq('id', encuestaId)
+      .single()
+    if (estadoActual?.estado !== 'abierta') {
+      toast.error('Esta encuesta ya no esta abierta')
+      navigate('/juez')
+      return
+    }
+
     const creator = new VotanteJuezCreator(supabase)
     const votante = creator.crear()
     const voterHash = await generarVoterHash(user.id, encuestaId)
@@ -234,9 +252,9 @@ export default function Votar() {
                               }))}
                             />
                             <span>
-                              <span className="block">{nivel.label}</span>
+                              {!opcion?.descriptor && <span className="block">{nivel.label}</span>}
                               {opcion?.descriptor && (
-                                <span className="mt-1 block text-[11px] font-normal leading-snug text-gray-600">
+                                <span className="block text-[11px] font-normal leading-snug text-gray-600">
                                   {opcion.descriptor}
                                 </span>
                               )}

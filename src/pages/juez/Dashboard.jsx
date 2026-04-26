@@ -16,6 +16,7 @@ import { generarVoterHash } from '../../utils/hash'
 import Layout from '../../components/layout/Layout'
 import Badge from '../../components/ui/Badge'
 import Spinner from '../../components/ui/Spinner'
+import { procesarEncuestasProgramadas } from '../../utils/scheduledSurveys'
 
 // Panel principal del juez: muestra todas las encuestas abiertas asignadas y su estado de votación
 export default function JuezDashboard() {
@@ -36,6 +37,7 @@ export default function JuezDashboard() {
   async function cargarEncuestas() {
     setCargando(true)
     try {
+      await procesarEncuestasProgramadas()
       // Consulta la tabla 'encuesta_juez' para obtener las encuestas asignadas al juez actual,
       // incluyendo datos anidados de la competición y el evento
       const { data: asignadas, error } = await supabase

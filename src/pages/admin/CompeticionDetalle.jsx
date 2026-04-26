@@ -1,7 +1,7 @@
-// Página de detalle de competición — ruta /admin/competiciones/:id
-// Centro de gestión de una competición: equipos, criterios de evaluación, encuestas y jurado
-// Todo el contenido está aislado por competición (no se comparte entre competiciones del mismo evento)
-import { useEffect, useState } from 'react'
+
+
+
+import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Plus, Trash2, ChevronRight, UserPlus } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -13,22 +13,25 @@ import Modal from '../../components/ui/Modal'
 import Badge from '../../components/ui/Badge'
 import Spinner from '../../components/ui/Spinner'
 import { RUBRICA_NIVELES, TIPOS_CON_OPCIONES, ajustarPesoOpcion, agruparRubrica, construirOpcionesRubrica, opcionesConTexto, ordenarOpciones, pesosOpcionesValidos, reescalarPesosOpciones } from '../../utils/scoring'
+import { DATETIME_INPUT_CLASS, datetimeLocalMasMinutos, datetimeLocalToIso, etiquetaApertura, etiquetaCierre, formatFechaLocal, limitarDatetimeLocal, nowDatetimeLocal, validarHorarioEncuesta } from '../../utils/dateTime'
+import { procesarEncuestasProgramadas } from '../../utils/scheduledSurveys'
 
 // Etiquetas y colores para los tipos de criterio en los badges
 const TIPO_LABELS = { numerico: 'Numerico', radio: 'Radio', checklist: 'Checklist', rubrica: 'Rubrica', comentario: 'Comentario' }
 const TIPO_COLORS = { numerico: 'blue', radio: 'purple', checklist: 'green', rubrica: 'blue', comentario: 'yellow' }
+const ORDEN_ESTADO_ENCUESTA = { borrador: 0, programada: 1, abierta: 2, cerrada: 3 }
 
 export default function CompeticionDetalle() {
-  const { id } = useParams()          // ID de la competición desde la URL
+  const { id } = useParams()
   const { user } = useAuthStore()
   const navigate = useNavigate()
 
-  // Estado principal de la página
-  const [comp, setComp] = useState(null)        // Datos de la competición (incluye evento)
+
+  const [comp, setComp] = useState(null)
   const [equipos, setEquipos] = useState([])    // Equipos con proyectos y participantes
-  const [criterios, setCriterios] = useState([]) // Criterios de evaluación con sus opciones
-  const [encuestas, setEncuestas] = useState([]) // Encuestas creadas para esta competición
-  const [jueces, setJueces] = useState([])       // Jueces asignados a esta competición
+  const [criterios, setCriterios] = useState([])
+  const [encuestas, setEncuestas] = useState([])
+  const [jueces, setJueces] = useState([])
   const [cargando, setCargando] = useState(true)
 
   // Control de apertura de modales
@@ -50,25 +53,40 @@ export default function CompeticionDetalle() {
     rubricaAspectos: [{ texto: 'Calidad tecnica', peso: 0.5, descriptores: {} }, { texto: 'Presentacion', peso: 0.5, descriptores: {} }]
   })
 
-  // Estado del formulario del modal de añadir juez
+
   const [correoJuez, setCorreoJuez] = useState('')
   const [encuestasJuez, setEncuestasJuez] = useState([])  // Encuestas opcionales a asignar al juez
 
-  // Estados de carga individuales para cada tipo de acción
+
   const [guardandoEquipo, setGuardandoEquipo] = useState(false)
   const [guardandoCriterio, setGuardandoCriterio] = useState(false)
   const [guardandoJuez, setGuardandoJuez] = useState(false)
   const [eliminandoEncuesta, setEliminandoEncuesta] = useState(null)
+  const [modalAbrirEnc, setModalAbrirEnc] = useState(false)
+  const [encuestaAbrirEnc, setEncuestaAbrirEnc] = useState(null)
+  const [hap, setHap] = useState('')
+  const [hci, setHci] = useState('')
+  const [guardandoApertura, setGuardandoApertura] = useState(false)
 
   useEffect(() => { cargarDatos() }, [id])
 
-  // Carga la competición primero (para verificar acceso), luego el resto en paralelo
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      await procesarEncuestasProgramadas({ competicionId: id })
+      const { data } = await supabase.from('encuesta').select('*').eq('competicion_id', id).order('created_at')
+      if (data) setEncuestas(data)
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [id])
+
+
   async function cargarDatos() {
+    await procesarEncuestasProgramadas({ competicionId: id })
     try {
-      // PASO 1: Carga la competición con su evento para verificar que el usuario es el organizador
+
       const { data: competicion, error: errComp } = await supabase
         .from('competicion').select('*, evento(organizador_id, nombre, id)').eq('id', id).single()
-      // Control de acceso: si la competición no existe o el usuario no es el organizador → redirige
+
       if (errComp || !competicion || competicion.evento.organizador_id !== user.id) {
         toast.error('Sin acceso')
         return navigate('/admin')
@@ -81,14 +99,14 @@ export default function CompeticionDetalle() {
         supabase.from('equipo').select('*, proyecto(*), participante(*)').eq('competicion_id', id),
         // Criterios con sus opciones (para radio/checklist), ordenados por 'orden'
         supabase.from('criterio').select('*, criterio_opcion(*)').eq('competicion_id', id).order('orden'),
-        // Encuestas de esta competición
+
         supabase.from('encuesta').select('*').eq('competicion_id', id).order('created_at'),
       ])
       setEquipos(eqs || [])
       setCriterios(crits || [])
       setEncuestas(encs || [])
 
-      // Jueces asignados específicamente a esta competición (tabla competicion_juez)
+
       // Usa join con 'persona' para obtener nombre y correo del juez
       const { data: compJueces } = await supabase
         .from('competicion_juez')
@@ -144,7 +162,7 @@ export default function CompeticionDetalle() {
     }
   }
 
-  // Crea un nuevo criterio de evaluación para esta competición
+
   const guardarCriterio = async () => {
     if (!nuevoCriterio.titulo.trim()) return toast.error('El título es obligatorio')
     if (nuevoCriterio.tipo === 'rubrica') {
@@ -166,14 +184,14 @@ export default function CompeticionDetalle() {
         descripcion: nuevoCriterio.descripcion || null,
         tipo: nuevoCriterio.tipo,
         peso: parseFloat(nuevoCriterio.peso) || 1.0,
-        orden: criterios.length  // Se añade al final de los criterios existentes
+        orden: criterios.length
       }
-      // Rango solo para criterios numéricos
+
       if (nuevoCriterio.tipo === 'numerico') {
         payload.rango_min = nuevoCriterio.rango_min !== '' ? parseFloat(nuevoCriterio.rango_min) : null
         payload.rango_max = nuevoCriterio.rango_max !== '' ? parseFloat(nuevoCriterio.rango_max) : null
       }
-      // Límite de selecciones solo para checklist
+
       if (nuevoCriterio.tipo === 'checklist') {
         payload.max_selecciones = nuevoCriterio.ilimitado ? null : parseInt(nuevoCriterio.max_selecciones) || null
       }
@@ -213,7 +231,7 @@ export default function CompeticionDetalle() {
     }
   }
 
-  // Añade un juez a la competición por su correo electrónico
+
   // Validaciones: usuario debe existir en 'persona' y no puede ser el organizador del evento
   const guardarJuez = async () => {
   if (!correoJuez.trim()) return
@@ -232,13 +250,13 @@ export default function CompeticionDetalle() {
       return
     }
 
-    // El organizador no puede ser juez de su propia competición
+
     if (persona.id === comp.evento.organizador_id) {
       toast.error('El organizador no puede ser juez de su propia competición')
       return
     }
 
-    // Lo asignamos a la competición
+
     const { error: errComp } = await supabase
       .from('competicion_juez')
       .upsert(
@@ -250,8 +268,8 @@ export default function CompeticionDetalle() {
 
     let idsEncuestas = encuestasJuez
 
-    // Si no se seleccionó ninguna encuesta manualmente,
-    // lo asignamos a todas las encuestas de esta competición
+
+
     if (idsEncuestas.length === 0) {
       const { data: encuestasComp, error: errEncuestasComp } = await supabase
         .from('encuesta')
@@ -263,7 +281,7 @@ export default function CompeticionDetalle() {
       idsEncuestas = (encuestasComp || []).map(e => e.id)
     }
 
-    // Asignación en encuesta_juez
+
     if (idsEncuestas.length > 0) {
       const { error: errEnc } = await supabase
         .from('encuesta_juez')
@@ -290,7 +308,7 @@ export default function CompeticionDetalle() {
   }
 }
 
-  // Elimina un juez de la competición por su persona_id
+
   const eliminarJuez = async (personaId) => {
     try {
       const { error } = await supabase
@@ -299,7 +317,7 @@ export default function CompeticionDetalle() {
         .eq('competicion_id', Number(id))
         .eq('persona_id', personaId)
       if (error) throw error
-      // Actualiza la lista local sin recargar toda la página
+
       setJueces(jueces.filter(j => j.persona_id !== personaId))
       toast.success('Juez eliminado')
     } catch (err) {
@@ -307,7 +325,7 @@ export default function CompeticionDetalle() {
     }
   }
 
-    // Elimina un criterio de evaluación por su ID
+
   // Elimina una encuesta cerrada y todos sus datos asociados
   const eliminarEncuestaCerrada = async (encuesta) => {
     if (encuesta.estado !== 'cerrada') {
@@ -377,6 +395,63 @@ export default function CompeticionDetalle() {
     }
   }
 
+  const abrirConHorario = async () => {
+    const errorHorario = validarHorarioEncuesta({ apertura: hap, cierre: hci })
+    if (errorHorario) {
+      toast.error(errorHorario)
+      return
+    }
+    setGuardandoApertura(true)
+    try {
+      const horaAperturaIso = datetimeLocalToIso(hap)
+      const horaCierreIso = datetimeLocalToIso(hci)
+      const aperturaFutura = horaAperturaIso && new Date(horaAperturaIso) > new Date()
+      const payload = aperturaFutura
+        ? { estado: 'programada', hora_apertura: horaAperturaIso, hora_cierre: horaCierreIso }
+        : { estado: 'abierta', hora_apertura: new Date().toISOString(), hora_cierre: horaCierreIso }
+      const { error } = await supabase.from('encuesta').update(payload).eq('id', encuestaAbrirEnc.id)
+      if (error) throw error
+      setEncuestas(prev => prev.map(e => e.id === encuestaAbrirEnc.id ? { ...e, ...payload } : e))
+      setModalAbrirEnc(false)
+      toast.success(payload.estado === 'programada' ? 'Encuesta programada' : 'Encuesta abierta')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setGuardandoApertura(false)
+    }
+  }
+
+  const errorHorarioAbrir = validarHorarioEncuesta({ apertura: hap, cierre: hci })
+  const encuestasOrdenadas = useMemo(() => {
+    return [...encuestas].sort((a, b) => {
+      const estadoA = ORDEN_ESTADO_ENCUESTA[a.estado] ?? 99
+      const estadoB = ORDEN_ESTADO_ENCUESTA[b.estado] ?? 99
+      if (estadoA !== estadoB) return estadoA - estadoB
+
+      const fechaA = a.hora_cierre || a.hora_apertura || a.created_at
+      const fechaB = b.hora_cierre || b.hora_apertura || b.created_at
+      return (fechaA ? new Date(fechaA).getTime() : Number.POSITIVE_INFINITY) -
+        (fechaB ? new Date(fechaB).getTime() : Number.POSITIVE_INFINITY)
+    })
+  }, [encuestas])
+
+  const cerrarEncuesta = async (encuestaId) => {
+    const enc = encuestas.find(e => e.id === encuestaId)
+    if (enc?.hora_cierre && new Date(enc.hora_cierre) > new Date()) {
+      const ok = window.confirm('Esta encuesta tiene un cierre automático programado. ¿Cerrarla ahora de todas formas?')
+      if (!ok) return
+    }
+    try {
+      const cierreReal = new Date().toISOString()
+      const { error } = await supabase.from('encuesta').update({ estado: 'cerrada', hora_cierre: cierreReal }).eq('id', encuestaId)
+      if (error) throw error
+      setEncuestas(prev => prev.map(e => e.id === encuestaId ? { ...e, estado: 'cerrada', hora_cierre: cierreReal } : e))
+      toast.success('Encuesta cerrada')
+    } catch (err) {
+      toast.error(err.message)
+    }
+  }
+
   const eliminarCriterio = async (critId) => {
   try {
     // 1. Comprobar si tiene respuestas de jurado
@@ -387,7 +462,7 @@ export default function CompeticionDetalle() {
 
     if (e1) throw e1
 
-    // 2. Comprobar si tiene respuestas del público
+
     const { count: countPublico, error: e2 } = await supabase
       .from('respuesta_criterio_publico')
       .select('*', { count: 'exact', head: true })
@@ -395,7 +470,7 @@ export default function CompeticionDetalle() {
 
     if (e2) throw e2
 
-    // 3. Si se está usando → no borrar
+
     if ((countJuez || 0) > 0 || (countPublico || 0) > 0) {
       toast.error('No se puede eliminar el criterio porque ya tiene votos asociados')
       return
@@ -425,7 +500,7 @@ export default function CompeticionDetalle() {
   return (
     <Layout>
       <div className="max-w-3xl mx-auto">
-        {/* Breadcrumb: Mis eventos → nombre del evento → nombre de la competición */}
+
         <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
           <Link to="/admin" className="hover:text-indigo-600">Mis eventos</Link>
           <ChevronRight size={14} />
@@ -434,7 +509,7 @@ export default function CompeticionDetalle() {
           <span className="text-gray-900 font-medium">{comp?.nombre}</span>
         </div>
 
-        {/* SECCIÓN: EQUIPOS */}
+
         <section className="mt-6">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold text-gray-900">Equipos</h2>
@@ -454,7 +529,7 @@ export default function CompeticionDetalle() {
                 {/* Lista de participantes del equipo */}
                 <div className="mt-2 space-y-0.5">
                   {eq.participante?.map(p => (
-                    <p key={p.id} className="text-xs text-gray-500">{p.nombre} · {p.correo}</p>
+                    <p key={p.id} className="text-xs text-gray-500">{p.nombre} - {p.correo}</p>
                   ))}
                 </div>
               </div>
@@ -463,7 +538,7 @@ export default function CompeticionDetalle() {
           {equipos.length === 0 && <p className="text-sm text-gray-500 py-4">No hay equipos aún</p>}
         </section>
 
-        {/* SECCIÓN: CRITERIOS DE EVALUACIÓN */}
+
         <section className="mt-8">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold text-gray-900">Criterios</h2>
@@ -481,10 +556,8 @@ export default function CompeticionDetalle() {
                     <Badge color={TIPO_COLORS[c.tipo]}>{TIPO_LABELS[c.tipo]}</Badge>
                     <Badge color="gray">peso: {c.peso}</Badge>
                   </div>
-                  {c.descripcion && <p className="text-xs text-gray-500">{c.descripcion}</p>}
-                  {/* Rango para criterios numéricos */}
                   {c.tipo === 'numerico' && (c.rango_min != null || c.rango_max != null) && (
-                    <p className="text-xs text-gray-400 mt-1">Rango: {c.rango_min ?? '—'} – {c.rango_max ?? '—'}</p>
+                    <p className="text-xs text-gray-400 mt-1">Rango: {c.rango_min ?? '-'} - {c.rango_max ?? '-'}</p>
                   )}
                   {/* Opciones para criterios radio/checklist */}
                   {TIPOS_CON_OPCIONES.includes(c.tipo) && c.criterio_opcion?.length > 0 && (
@@ -510,47 +583,63 @@ export default function CompeticionDetalle() {
           {criterios.length === 0 && <p className="text-sm text-gray-500 py-4">No hay criterios aún</p>}
         </section>
 
-        {/* SECCIÓN: ENCUESTAS */}
+
         <section className="mt-8">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold text-gray-900">Encuestas</h2>
-            {/* Link para crear una nueva encuesta para esta competición */}
+
             <Link to={`/admin/competiciones/${id}/encuesta/nueva`}>
               <Button size="sm"><Plus size={14} /> Nueva encuesta</Button>
             </Link>
           </div>
           <div className="space-y-2">
-            {encuestas.map(e => (
-              <div key={e.id} className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-gray-800">{e.nombre}</p>
-                  <div className="flex gap-2 mt-1">
-                    {/* Estado de la encuesta: borrador/abierta/cerrada */}
-                    <Badge color={e.estado === 'abierta' ? 'green' : e.estado === 'cerrada' ? 'red' : 'gray'}>
-                      {e.estado}
-                    </Badge>
-                    {/* Tipo de votante: juez/público/ambos */}
-                    <Badge color="blue">{e.tipo_votante}</Badge>
-                    {/* Código de sala para el voto público */}
-                    {e.codigo_sala && <Badge color="purple">Sala: {e.codigo_sala}</Badge>}
+            {encuestasOrdenadas.map(e => (
+              <div key={e.id} className="bg-white border border-gray-200 rounded-xl p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium text-gray-800 truncate">{e.nombre}</p>
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      <Badge color={e.estado === 'abierta' ? 'green' : e.estado === 'cerrada' ? 'red' : e.estado === 'programada' ? 'yellow' : 'gray'}>
+                        {e.estado}
+                      </Badge>
+                      <Badge color="blue">{e.tipo_votante}</Badge>
+                      {e.codigo_sala && <Badge color="purple">Sala: {e.codigo_sala}</Badge>}
+                    </div>
+                    {(e.hora_reapertura || e.hora_apertura || e.hora_cierre) && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        {e.hora_reapertura ? <span>Reabierta: {formatFechaLocal(e.hora_reapertura)}</span> : e.hora_apertura && <span>{etiquetaApertura(e.hora_apertura)}: {formatFechaLocal(e.hora_apertura)}</span>}
+                        {(e.hora_reapertura || e.hora_apertura) && e.hora_cierre && <span> - </span>}
+                        {e.hora_cierre && <span>{etiquetaCierre(e.hora_cierre)}: {formatFechaLocal(e.hora_cierre)}</span>}
+                      </p>
+                    )}
                   </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  {/* Link a los resultados de la encuesta */}
-                  <Link to={`/admin/encuestas/${e.id}/resultados`} className="text-sm text-indigo-600 hover:underline">
-                    Detalles
-                  </Link>
-                  {e.estado === 'cerrada' && (
-                    <button
-                      type="button"
-                      onClick={() => eliminarEncuestaCerrada(e)}
-                      disabled={eliminandoEncuesta === e.id}
-                      className="text-red-400 hover:text-red-600 disabled:opacity-50"
-                      title="Eliminar encuesta cerrada"
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {e.estado === 'borrador' && (
+                      <button type="button"
+                        onClick={() => { setEncuestaAbrirEnc(e); setHap(''); setHci(''); setModalAbrirEnc(true) }}
+                        className="text-sm font-medium text-green-600 hover:text-green-800">
+                        Abrir
+                      </button>
+                    )}
+                    {e.estado === 'abierta' && (
+                      <button type="button" onClick={() => cerrarEncuesta(e.id)}
+                        className="text-sm font-medium text-red-500 hover:text-red-700">
+                        Cerrar
+                      </button>
+                    )}
+                    <Link to={`/admin/encuestas/${e.id}/resultados`}
+                      className="text-sm text-indigo-600 hover:underline whitespace-nowrap">
+                      Detalles
+                    </Link>
+                    {e.estado === 'cerrada' && (
+                      <button type="button" onClick={() => eliminarEncuestaCerrada(e)}
+                        disabled={eliminandoEncuesta === e.id}
+                        className="text-red-400 hover:text-red-600 disabled:opacity-50"
+                        title="Eliminar encuesta cerrada">
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
@@ -558,7 +647,7 @@ export default function CompeticionDetalle() {
           {encuestas.length === 0 && <p className="text-sm text-gray-500 py-4">No hay encuestas aún</p>}
         </section>
 
-        {/* SECCIÓN: JURADO */}
+
         <section className="mt-8 mb-8">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold text-gray-900">Jurado</h2>
@@ -574,7 +663,7 @@ export default function CompeticionDetalle() {
                   <p className="font-medium text-sm text-gray-800">{j.persona?.nombre || '(sin nombre)'}</p>
                   <p className="text-xs text-gray-500">{j.persona?.correo}</p>
                 </div>
-                {/* Botón para eliminar al juez de esta competición */}
+
                 <button
                   onClick={() => eliminarJuez(j.persona_id)}
                   className="text-red-400 hover:text-red-600 ml-4 flex-shrink-0"
@@ -590,7 +679,7 @@ export default function CompeticionDetalle() {
         </section>
       </div>
 
-      {/* MODAL: AÑADIR EQUIPO */}
+
       <Modal open={modalEquipo} onClose={() => setModalEquipo(false)} title="Añadir equipo" maxWidth="max-w-xl">
         <div className="space-y-4">
           <div>
@@ -611,7 +700,7 @@ export default function CompeticionDetalle() {
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-sm font-medium text-gray-700">Participantes</label>
-              {/* Botón para añadir filas de participantes al formulario */}
+
               <Button type="button" size="sm" variant="secondary" onClick={() => setNuevoEquipo({ ...nuevoEquipo, participantes: [...nuevoEquipo.participantes, { nombre: '', correo: '' }] })}>
                 <Plus size={13} /> Añadir
               </Button>
@@ -622,7 +711,7 @@ export default function CompeticionDetalle() {
                   className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Nombre" />
                 <input value={p.correo} onChange={e => { const ps = [...nuevoEquipo.participantes]; ps[i].correo = e.target.value; setNuevoEquipo({ ...nuevoEquipo, participantes: ps }) }}
                   className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Correo" />
-                {/* Botón para eliminar fila — solo si hay más de un participante */}
+
                 {nuevoEquipo.participantes.length > 1 && (
                   <button type="button" onClick={() => setNuevoEquipo({ ...nuevoEquipo, participantes: nuevoEquipo.participantes.filter((_, j) => j !== i) })} className="text-red-400">
                     <Trash2 size={15} />
@@ -638,7 +727,7 @@ export default function CompeticionDetalle() {
         </div>
       </Modal>
 
-      {/* MODAL: AÑADIR CRITERIO */}
+
       <Modal open={modalCriterio} onClose={() => setModalCriterio(false)} title="Añadir criterio" maxWidth="max-w-xl">
         <div className="space-y-4">
           <div>
@@ -670,7 +759,7 @@ export default function CompeticionDetalle() {
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
             </div>
           </div>
-          {/* Rango solo para criterios numéricos */}
+
           {nuevoCriterio.tipo === 'numerico' && (
             <div className="flex gap-3">
               <div className="flex-1">
@@ -778,7 +867,7 @@ export default function CompeticionDetalle() {
               ))}
             </div>
           )}
-          {/* Configuración de límite de selecciones para checklist */}
+
           {nuevoCriterio.tipo === 'checklist' && (
             <div className="flex items-center gap-3">
               <label className="text-sm text-gray-700">Máx. selecciones:</label>
@@ -799,7 +888,8 @@ export default function CompeticionDetalle() {
         </div>
       </Modal>
 
-      {/* MODAL: AÑADIR JUEZ */}
+
+
       <Modal open={modalJuez} onClose={() => { setModalJuez(false); setCorreoJuez(''); setEncuestasJuez([]) }} title="Añadir juez">
         <div className="space-y-4">
           <div>
@@ -808,7 +898,7 @@ export default function CompeticionDetalle() {
             <input type="email" value={correoJuez} onChange={e => setCorreoJuez(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="juez@ejemplo.com" />
           </div>
-          {/* Selector opcional de encuestas — solo visible si la competición ya tiene encuestas */}
+
           {encuestas.length > 0 && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Asignar a encuestas (opcional)</label>
@@ -827,6 +917,65 @@ export default function CompeticionDetalle() {
           </div>
         </div>
       </Modal>
+
+      {/* MODAL: ABRIR ENCUESTA (horas opcionales) */}
+      <Modal open={modalAbrirEnc} onClose={() => setModalAbrirEnc(false)} title="Abrir encuesta">
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-xl border border-gray-200 p-3 space-y-2">
+              <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                <span className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0" />
+                Apertura
+              </div>
+              <input
+                type="datetime-local"
+                value={hap}
+                min={nowDatetimeLocal()}
+                onChange={e => {
+                  const apertura = limitarDatetimeLocal(e.target.value, nowDatetimeLocal())
+                  setHap(apertura)
+                  if (hci) setHci(limitarDatetimeLocal(hci, datetimeLocalMasMinutos(apertura)))
+                }}
+                className={DATETIME_INPUT_CLASS}
+              />
+              {hap && <button onClick={() => setHap('')} className="text-xs text-gray-400 hover:text-gray-600">Quitar</button>}
+            </div>
+            <div className="rounded-xl border border-gray-200 p-3 space-y-2">
+              <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                <span className="w-2 h-2 rounded-full bg-red-400 flex-shrink-0" />
+                Cierre
+              </div>
+              <input
+                type="datetime-local"
+                value={hci}
+                min={hap ? datetimeLocalMasMinutos(hap) : nowDatetimeLocal()}
+                onChange={e => setHci(limitarDatetimeLocal(e.target.value, hap ? datetimeLocalMasMinutos(hap) : nowDatetimeLocal()))}
+                className={DATETIME_INPUT_CLASS}
+              />
+              {hci && <button onClick={() => setHci('')} className="text-xs text-gray-400 hover:text-gray-600">Quitar</button>}
+            </div>
+          </div>
+          <p className="text-xs text-gray-400">
+            Deja vacío para abrir ahora sin cierre automático.
+          </p>
+          {errorHorarioAbrir && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">
+              {errorHorarioAbrir}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="secondary" onClick={() => setModalAbrirEnc(false)}>Cancelar</Button>
+            <Button
+              loading={guardandoApertura}
+              onClick={abrirConHorario}
+              disabled={!!errorHorarioAbrir}
+            >
+              {hap && new Date(hap) > new Date() ? 'Programar' : 'Abrir ahora'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </Layout>
   )
 }
+
