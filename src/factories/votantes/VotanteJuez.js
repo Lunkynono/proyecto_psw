@@ -1,7 +1,7 @@
 import { VotanteBase } from './VotanteBase'
 
 export class VotanteJuez extends VotanteBase {
-  async votar({ encuestaId, proyectoId, voterHash, criterios, data, checklistSeleccionados }) {
+  async votar({ encuestaId, proyectoId, voterHash, criterios, data, checklistSeleccionados, rubricaSeleccionada }) {
     // Revalidar que la encuesta sigue abierta
     const { data: enc, error: encError } = await this.supabase
       .from('encuesta')
@@ -40,6 +40,9 @@ export class VotanteJuez extends VotanteBase {
         resp.opciones_ids = data[`criterio_${c.id}`]
           ? [Number(data[`criterio_${c.id}`])]
           : null
+      } else if (c.tipo === 'rubrica') {
+        const seleccionadas = Object.values(rubricaSeleccionada?.[c.id] || {})
+        resp.opciones_ids = seleccionadas.length ? seleccionadas.map(Number) : null
       } else if (c.tipo === 'checklist') {
         resp.opciones_ids = checklistSeleccionados[c.id]?.length
           ? checklistSeleccionados[c.id]

@@ -16,10 +16,11 @@ import Input from '../../components/ui/Input'
 import Modal from '../../components/ui/Modal'
 import Badge from '../../components/ui/Badge'
 import Spinner from '../../components/ui/Spinner'
+import { RUBRICA_NIVELES, TIPOS_CON_OPCIONES, ajustarPesoOpcion, construirOpcionesRubrica, opcionesConTexto, pesosOpcionesValidos, reescalarPesosOpciones } from '../../utils/scoring'
 
 // Etiquetas y colores de los tipos de criterio para los badges
-const TIPO_LABELS = { numerico: 'Numérico', radio: 'Radio', checklist: 'Checklist', comentario: 'Comentario' }
-const TIPO_COLORS = { numerico: 'blue', radio: 'purple', checklist: 'green', comentario: 'yellow' }
+const TIPO_LABELS = { numerico: 'Numerico', radio: 'Radio', checklist: 'Checklist', rubrica: 'Rubrica', comentario: 'Comentario' }
+const TIPO_COLORS = { numerico: 'blue', radio: 'purple', checklist: 'green', rubrica: 'blue', comentario: 'yellow' }
 
 export default function EncuestaCrear() {
   const { id: competicionId } = useParams()  // ID de la competición desde la URL
@@ -38,7 +39,8 @@ export default function EncuestaCrear() {
   const [nuevoCriterio, setNuevoCriterio] = useState({
     titulo: '', descripcion: '', tipo: 'numerico', peso: 1.0,
     rango_min: '', rango_max: '', max_selecciones: '', ilimitado: true,
-    opciones: [{ texto: '' }, { texto: '' }]  // Opciones para tipos radio/checklist
+    opciones: [{ texto: '', peso: 0 }, { texto: '', peso: 1 }],
+    rubricaAspectos: [{ texto: 'Calidad tecnica', peso: 0.5, descriptores: {} }, { texto: 'Presentacion', peso: 0.5, descriptores: {} }]
   })
 
   const { register, handleSubmit, formState: { errors } } = useForm({
@@ -86,6 +88,16 @@ export default function EncuestaCrear() {
   // Crea un nuevo criterio en la BD y lo añade automáticamente a la selección
   const crearCriterio = async () => {
     if (!nuevoCriterio.titulo.trim()) return toast.error('Título obligatorio')
+    if (nuevoCriterio.tipo === 'rubrica') {
+      const aspectos = nuevoCriterio.rubricaAspectos.filter(a => a.texto.trim())
+      if (aspectos.length === 0) return toast.error('Añade al menos un aspecto a evaluar')
+    } else if (['radio', 'checklist'].includes(nuevoCriterio.tipo)) {
+      const opciones = opcionesConTexto(nuevoCriterio.opciones)
+      if (opciones.length < 2) return toast.error('Añade al menos dos opciones')
+      if (!pesosOpcionesValidos(nuevoCriterio.peso, opciones)) {
+        return toast.error(`La suma de pesos de las opciones debe ser ${nuevoCriterio.peso}`)
+      }
+    }
     setGuardandoCriterio(true)
     try {
       // Construye el payload según el tipo de criterio
@@ -109,18 +121,28 @@ export default function EncuestaCrear() {
       const { data: crit, error } = await supabase.from('criterio').insert(payload).select().single()
       if (error) throw error
 
-      // Inserta las opciones para criterios tipo radio o checklist
-      if (['radio', 'checklist'].includes(nuevoCriterio.tipo)) {
-        const opciones = nuevoCriterio.opciones.filter(o => o.texto.trim())
+      // Inserta las opciones para criterios tipo radio, checklist o rubrica
+      if (TIPOS_CON_OPCIONES.includes(nuevoCriterio.tipo)) {
+        const opciones = nuevoCriterio.tipo === 'rubrica'
+          ? construirOpcionesRubrica(nuevoCriterio.rubricaAspectos, nuevoCriterio.peso)
+          : opcionesConTexto(nuevoCriterio.opciones)
         if (opciones.length > 0) {
-          await supabase.from('criterio_opcion').insert(opciones.map((o, i) => ({ criterio_id: crit.id, texto: o.texto.trim(), orden: i })))
+          await supabase.from('criterio_opcion').insert(opciones.map((o, i) => ({
+            criterio_id: crit.id,
+            texto: o.texto.trim(),
+            aspecto: o.aspecto || null,
+            nivel: o.nivel || null,
+            descriptor: o.descriptor || null,
+            peso: o.peso !== '' ? parseFloat(o.peso) || 0 : 0,
+            orden: o.orden ?? i
+          })))
         }
       }
       // Añade el criterio a la lista local y lo marca como seleccionado automáticamente
       setCriterios([...criterios, { ...crit, criterio_opcion: [] }])
       setCriteriosSeleccionados([...criteriosSeleccionados, crit.id])
       // Resetea el formulario del modal
-      setNuevoCriterio({ titulo: '', descripcion: '', tipo: 'numerico', peso: 1.0, rango_min: '', rango_max: '', max_selecciones: '', ilimitado: true, opciones: [{ texto: '' }, { texto: '' }] })
+      setNuevoCriterio({ titulo: '', descripcion: '', tipo: 'numerico', peso: 1.0, rango_min: '', rango_max: '', max_selecciones: '', ilimitado: true, opciones: [{ texto: '', peso: 0 }, { texto: '', peso: 1 }], rubricaAspectos: [{ texto: 'Calidad tecnica', peso: 0.5, descriptores: {} }, { texto: 'Presentacion', peso: 0.5, descriptores: {} }] })
       setModalCriterio(false)
       toast.success('Criterio creado y añadido')
     } catch (err) {
@@ -278,7 +300,7 @@ export default function EncuestaCrear() {
       </div>
 
       {/* Modal para crear un nuevo criterio directamente desde esta pantalla */}
-      <Modal open={modalCriterio} onClose={() => setModalCriterio(false)} title="Crear criterio" maxWidth="max-w-lg">
+      <Modal open={modalCriterio} onClose={() => setModalCriterio(false)} title="Crear criterio" maxWidth="max-w-xl">
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Título *</label>
@@ -293,18 +315,19 @@ export default function EncuestaCrear() {
           <div className="flex gap-3">
             <div className="flex-1">
               <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
-              <select value={nuevoCriterio.tipo} onChange={e => setNuevoCriterio({ ...nuevoCriterio, tipo: e.target.value })}
+              <select value={nuevoCriterio.tipo} onChange={e => setNuevoCriterio({ ...nuevoCriterio, tipo: e.target.value, opciones: reescalarPesosOpciones(nuevoCriterio.opciones, nuevoCriterio.peso), rubricaAspectos: reescalarPesosOpciones(nuevoCriterio.rubricaAspectos, nuevoCriterio.peso) })}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
                 <option value="numerico">Numérico</option>
                 <option value="radio">Radio</option>
                 <option value="checklist">Checklist</option>
+                <option value="rubrica">Rubrica</option>
                 <option value="comentario">Comentario</option>
               </select>
             </div>
             <div className="w-24">
               <label className="block text-sm font-medium text-gray-700 mb-1">Peso</label>
               <input type="number" step="0.1" min="0.1" value={nuevoCriterio.peso}
-                onChange={e => setNuevoCriterio({ ...nuevoCriterio, peso: e.target.value })}
+                onChange={e => setNuevoCriterio({ ...nuevoCriterio, peso: e.target.value, opciones: reescalarPesosOpciones(nuevoCriterio.opciones, e.target.value), rubricaAspectos: reescalarPesosOpciones(nuevoCriterio.rubricaAspectos, e.target.value) })}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
             </div>
           </div>
@@ -323,22 +346,95 @@ export default function EncuestaCrear() {
               </div>
             </div>
           )}
+          {nuevoCriterio.tipo === 'rubrica' && (
+            <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-sm font-medium text-gray-800">Aspectos de la rubrica</label>
+                <Button type="button" size="sm" variant="secondary" onClick={() => setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: reescalarPesosOpciones([...nuevoCriterio.rubricaAspectos, { texto: '', peso: 0, descriptores: {} }], nuevoCriterio.peso) })}>
+                  <Plus size={13} /> Aspecto
+                </Button>
+              </div>
+              <div className="space-y-2">
+                {nuevoCriterio.rubricaAspectos.map((aspecto, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_6rem_auto_auto] gap-2">
+                    <input value={aspecto.texto} onChange={e => { const aspectos = [...nuevoCriterio.rubricaAspectos]; aspectos[i].texto = e.target.value; setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: aspectos }) }}
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder={`Aspecto ${i + 1}`} />
+                    <input type="number" step="0.1" min="0" max={nuevoCriterio.peso} value={aspecto.peso ?? 0} onChange={e => setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: ajustarPesoOpcion(nuevoCriterio.rubricaAspectos, i, e.target.value, nuevoCriterio.peso) })}
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Peso" />
+                    <button type="button" onClick={() => { const aspectos = [...nuevoCriterio.rubricaAspectos]; aspectos[i] = { ...aspectos[i], descriptoresAbiertos: !aspectos[i].descriptoresAbiertos }; setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: aspectos }) }} className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-white">
+                      Descriptores
+                    </button>
+                    <button type="button" onClick={() => setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: reescalarPesosOpciones(nuevoCriterio.rubricaAspectos.filter((_, j) => j !== i), nuevoCriterio.peso) })} className={`text-red-400 ${nuevoCriterio.rubricaAspectos.length <= 1 ? 'invisible' : ''}`}>
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 overflow-hidden rounded-lg border border-gray-200 bg-white">
+                <div className="grid grid-cols-[1.2fr_repeat(4,1fr)] bg-gray-50 text-xs font-semibold text-gray-600">
+                  <div className="px-3 py-2">Aspecto</div>
+                  {RUBRICA_NIVELES.map(nivel => (
+                    <div key={nivel.key} className="px-3 py-2 text-center">{nivel.label}</div>
+                  ))}
+                </div>
+                {nuevoCriterio.rubricaAspectos.filter(a => a.texto.trim()).map((aspecto) => (
+                  <div key={aspecto.texto} className="grid grid-cols-[1.2fr_repeat(4,1fr)] border-t border-gray-100 text-xs">
+                    <div className="px-3 py-2 font-medium text-gray-700">{aspecto.texto}</div>
+                    {RUBRICA_NIVELES.map(nivel => {
+                      const aspectoIndex = nuevoCriterio.rubricaAspectos.findIndex(a => a === aspecto)
+                      return (
+                        <div key={nivel.key} className={`m-1 rounded-md border p-2 ${nivel.color}`}>
+                          <div className="text-center font-semibold">
+                            {((Number(aspecto.peso) || 0) * nivel.factor).toFixed(2)}
+                          </div>
+                          {aspecto.descriptoresAbiertos && (
+                            <textarea
+                              rows={2}
+                              value={aspecto.descriptores?.[nivel.key] || ''}
+                              onChange={e => {
+                                const aspectos = [...nuevoCriterio.rubricaAspectos]
+                                aspectos[aspectoIndex] = {
+                                  ...aspectos[aspectoIndex],
+                                  descriptores: {
+                                    ...(aspectos[aspectoIndex].descriptores || {}),
+                                    [nivel.key]: e.target.value
+                                  }
+                                }
+                                setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: aspectos })
+                              }}
+                              className="mt-1 w-full resize-none rounded border border-white/70 bg-white/70 px-2 py-1 text-[11px] text-gray-700"
+                              placeholder="Opcional"
+                            />
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Opciones de texto para criterios radio y checklist */}
           {['radio', 'checklist'].includes(nuevoCriterio.tipo) && (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium text-gray-700">Opciones</label>
-                <Button type="button" size="sm" variant="secondary" onClick={() => setNuevoCriterio({ ...nuevoCriterio, opciones: [...nuevoCriterio.opciones, { texto: '' }] })}>
+                <label className="text-sm font-medium text-gray-700">
+                  {nuevoCriterio.tipo === 'rubrica' ? 'Niveles de rubrica' : 'Opciones'}
+                </label>
+                <Button type="button" size="sm" variant="secondary" onClick={() => setNuevoCriterio({ ...nuevoCriterio, opciones: [...nuevoCriterio.opciones, { texto: '', peso: 0 }] })}>
                   <Plus size={13} />
                 </Button>
               </div>
               {nuevoCriterio.opciones.map((op, i) => (
-                <div key={i} className="flex gap-2 mb-2">
+                <div key={i} className="grid grid-cols-[1fr_6rem_auto] gap-2 mb-2">
                   <input value={op.texto} onChange={e => { const ops = [...nuevoCriterio.opciones]; ops[i].texto = e.target.value; setNuevoCriterio({ ...nuevoCriterio, opciones: ops }) }}
                     className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder={`Opción ${i + 1}`} />
                   {/* Botón de eliminar opción — solo si hay más de 2 */}
+                  <input type="number" step="0.1" min="0" max={nuevoCriterio.peso} value={op.peso ?? 0} onChange={e => setNuevoCriterio({ ...nuevoCriterio, opciones: ajustarPesoOpcion(nuevoCriterio.opciones, i, e.target.value, nuevoCriterio.peso) })}
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Peso" />
                   {nuevoCriterio.opciones.length > 2 && (
-                    <button type="button" onClick={() => setNuevoCriterio({ ...nuevoCriterio, opciones: nuevoCriterio.opciones.filter((_, j) => j !== i) })} className="text-red-400">
+                    <button type="button" onClick={() => setNuevoCriterio({ ...nuevoCriterio, opciones: reescalarPesosOpciones(nuevoCriterio.opciones.filter((_, j) => j !== i), nuevoCriterio.peso) })} className="text-red-400">
                       <Trash2 size={15} />
                     </button>
                   )}

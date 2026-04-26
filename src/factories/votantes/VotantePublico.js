@@ -1,7 +1,7 @@
 import { VotanteBase } from './VotanteBase'
 
 export class VotantePublico extends VotanteBase {
-  async votar({ encuesta, identidad, proyectos, criterios, respuestas, checklistSel }) {
+  async votar({ encuesta, identidad, proyectos, criterios, respuestas, checklistSel, rubricaSel }) {
     if (!encuesta || !identidad) {
       throw new Error('No se han proporcionado datos de votación')
     }
@@ -56,6 +56,9 @@ export class VotantePublico extends VotanteBase {
             resp.opciones_ids = respuestas[key]
               ? [Number(respuestas[key])]
               : null
+          } else if (c.tipo === 'rubrica') {
+            const seleccionadas = Object.values(rubricaSel?.[key] || {})
+            resp.opciones_ids = seleccionadas.length ? seleccionadas.map(Number) : null
           } else if (c.tipo === 'checklist') {
             resp.opciones_ids = checklistSel[key]?.length
               ? checklistSel[key]

@@ -12,6 +12,7 @@ import { supabase } from '../../lib/supabase'
 import { VotantePublicoCreator } from '../../factories/creators/VotantePublicoCreator'
 // Spinner de carga mientras se obtienen datos de la encuesta
 import Spinner from '../../components/ui/Spinner'
+import { RUBRICA_NIVELES, agruparRubrica, ordenarOpciones } from '../../utils/scoring'
 
 // Tercera página del flujo público: muestra todos los proyectos con sus criterios para que el público vote
 export default function VotarPublico() {
@@ -36,6 +37,7 @@ export default function VotarPublico() {
   const [respuestas, setRespuestas] = useState({}) // { [proyectoId_criterioId]: valor }
   // Mapa de selecciones para criterios checklist: clave = "proyectoId_criterioId"
   const [checklistSel, setChecklistSel] = useState({}) // { [proyectoId_criterioId]: [opcionId] }
+  const [rubricaSel, setRubricaSel] = useState({})
   // Datos de identidad del votante recuperados del localStorage (nombre, correo, encuesta_id)
   const [identidad, setIdentidad] = useState(null)
 
@@ -169,6 +171,19 @@ export default function VotarPublico() {
     return
   }
 
+  const rubricaIncompleta = proyectos.some(proyecto =>
+    criterios.some(c => {
+      if (c.tipo !== 'rubrica') return false
+      const key = `${proyecto.id}_${c.id}`
+      return agruparRubrica(c.criterio_opcion || []).some(g => !rubricaSel[key]?.[g.aspecto])
+    })
+  )
+
+  if (rubricaIncompleta) {
+    toast.error('Completa todos los aspectos de las rubricas')
+    return
+  }
+
   setEnviando(true)
 
   try {
@@ -181,7 +196,8 @@ export default function VotarPublico() {
       proyectos,
       criterios,
       respuestas,
-      checklistSel
+      checklistSel,
+      rubricaSel
     })
 
     localStorage.removeItem('votify_sala')
@@ -281,8 +297,8 @@ export default function VotarPublico() {
                     {c.tipo === 'radio' && (
                       <div className="space-y-2">
                         {/* Ordenamos las opciones por su campo 'orden' */}
-                        {(c.criterio_opcion || []).sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0)).map(op => (
-                          <label key={op.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                        {ordenarOpciones(c.criterio_opcion || []).map(op => (
+                          <label key={op.id} className="flex items-start gap-2 text-sm cursor-pointer">
                             <input
                               type="radio"
                               // Agrupamos los radios por proyecto y criterio para que sean independientes
@@ -292,9 +308,54 @@ export default function VotarPublico() {
                               checked={respuestas[`${proyecto.id}_${c.id}`] == op.id}
                               onChange={() => setRespuesta(proyecto.id, c.id, op.id)}
                             />
-                            {op.texto}
+                            <span>{op.texto}</span>
                           </label>
                         ))}
+                      </div>
+                    )}
+
+                    {c.tipo === 'rubrica' && (
+                      <div className="w-full overflow-x-auto rounded-xl border border-gray-200">
+                        <div className="min-w-[620px]">
+                          <div className="grid grid-cols-[1.25fr_repeat(4,1fr)] bg-gray-50 text-xs font-semibold text-gray-600">
+                            <div className="px-3 py-2">Aspecto</div>
+                            {RUBRICA_NIVELES.map(nivel => (
+                              <div key={nivel.key} className="px-3 py-2 text-center">{nivel.label}</div>
+                            ))}
+                          </div>
+                        {agruparRubrica(c.criterio_opcion || []).map(grupo => (
+                          <div key={grupo.aspecto} className="grid grid-cols-[1.25fr_repeat(4,1fr)] border-t border-gray-100">
+                            <div className="flex items-center px-3 py-3 text-sm font-semibold text-gray-800">{grupo.aspecto}</div>
+                              {RUBRICA_NIVELES.map(nivel => {
+                              const opcion = grupo.opciones.find(op => op.nivel === nivel.key)
+                              const key = `${proyecto.id}_${c.id}`
+                              const seleccionado = rubricaSel[key]?.[grupo.aspecto] === opcion?.id
+                              return (
+                                <label key={nivel.key} className={`m-1 flex min-h-12 cursor-pointer items-center justify-center rounded-lg border px-2 py-2 text-center text-xs font-semibold transition hover:shadow-sm ${seleccionado ? 'ring-2 ring-indigo-500 ring-offset-1 ' : ''}${nivel.color}`}>
+                                  <input
+                                    type="radio"
+                                    className="sr-only"
+                                    checked={seleccionado}
+                                    disabled={!opcion}
+                                    onChange={() => setRubricaSel(prev => ({
+                                      ...prev,
+                                      [key]: { ...(prev[key] || {}), [grupo.aspecto]: opcion.id }
+                                    }))}
+                                  />
+                                  <span>
+                                    <span className="block">{nivel.label}</span>
+                                    {opcion?.descriptor && (
+                                      <span className="mt-1 block text-[11px] font-normal leading-snug text-gray-600">
+                                        {opcion.descriptor}
+                                      </span>
+                                    )}
+                                  </span>
+                                </label>
+                              )
+                            })}
+                          </div>
+                        ))}
+                        </div>
                       </div>
                     )}
 
@@ -305,7 +366,7 @@ export default function VotarPublico() {
                         {c.max_selecciones && (
                           <p className="text-xs text-gray-400">Máximo {c.max_selecciones} selecciones</p>
                         )}
-                        {(c.criterio_opcion || []).sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0)).map(op => {
+                        {ordenarOpciones(c.criterio_opcion || []).map(op => {
                           // Clave compuesta para identificar las selecciones de este par proyecto-criterio
                           const key = `${proyecto.id}_${c.id}`
                           // Selecciones actuales para esta clave
@@ -322,7 +383,7 @@ export default function VotarPublico() {
                                 // Delegamos la lógica de toggle al handler especializado
                                 onChange={() => toggleChecklist(proyecto.id, c.id, op.id, c.max_selecciones)}
                               />
-                              {op.texto}
+                              <span>{op.texto}</span>
                             </label>
                           )
                         })}

@@ -14,6 +14,7 @@ import Layout from '../../components/layout/Layout'
 import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
 import Spinner from '../../components/ui/Spinner'
+import { TIPOS_PUNTUABLES, calcularPuntajePonderado } from '../../utils/scoring'
 
 // Las dos pestañas de la página
 const TABS = ['Ranking', 'Comentarios']
@@ -111,17 +112,17 @@ export default function Resultados() {
       // Obtiene los criterios numéricos de la encuesta con sus pesos
       const { data: encCriterios, error: critError } = await supabase
         .from('encuesta_criterio')
-        .select('criterio(id, peso, tipo)')
+        .select('criterio(id, peso, tipo, criterio_opcion(*))')
         .eq('encuesta_id', encuestaId)
 
       if (critError) throw critError
 
-      const criteriosNumericos = (encCriterios || [])
+      const criteriosPuntuables = (encCriterios || [])
         .map(ec => ec.criterio)
-        .filter(c => c?.tipo === 'numerico')
+        .filter(c => TIPOS_PUNTUABLES.includes(c?.tipo))
 
       // Suma total de pesos para normalizar los puntajes
-      const sumaPesos = criteriosNumericos.reduce((s, c) => s + parseFloat(c.peso), 0)
+      const sumaPesos = criteriosPuntuables.reduce((s, c) => s + parseFloat(c.peso), 0)
 
       // Calcula el puntaje proyecto a proyecto
       const puntajes = await Promise.all(
@@ -146,21 +147,19 @@ export default function Resultados() {
           let puntaje = 0
 
           // Si hay criterios numéricos, calcular media ponderada
-          if (criteriosNumericos.length > 0 && sumaPesos > 0) {
+          if (criteriosPuntuables.length > 0 && sumaPesos > 0) {
             const [{ data: respuestasPublico }, { data: respuestasJuez }] = await Promise.all([
               supabase
                 .from('respuesta_criterio_publico')
-                .select('criterio_id, valor_numerico, voto_publico!inner(encuesta_id, proyecto_id)')
+                .select('criterio_id, valor_numerico, opciones_ids, voto_publico!inner(encuesta_id, proyecto_id)')
                 .eq('voto_publico.encuesta_id', encuestaId)
-                .eq('voto_publico.proyecto_id', proyecto.id)
-                .not('valor_numerico', 'is', null),
+                .eq('voto_publico.proyecto_id', proyecto.id),
 
               supabase
                 .from('respuesta_criterio')
-                .select('criterio_id, valor_numerico, voto!inner(encuesta_id, proyecto_id)')
+                .select('criterio_id, valor_numerico, opciones_ids, voto!inner(encuesta_id, proyecto_id)')
                 .eq('voto.encuesta_id', encuestaId)
                 .eq('voto.proyecto_id', proyecto.id)
-                .not('valor_numerico', 'is', null)
             ])
 
             const todasLasRespuestas = [
@@ -168,22 +167,7 @@ export default function Resultados() {
               ...(respuestasJuez || [])
             ]
 
-            let suma = 0
-
-            criteriosNumericos.forEach(c => {
-              const vals = todasLasRespuestas.filter(
-                r => r.criterio_id === c.id && r.valor_numerico != null
-              )
-
-              if (vals.length > 0) {
-                const media =
-                  vals.reduce((acc, r) => acc + parseFloat(r.valor_numerico), 0) / vals.length
-
-                suma += media * parseFloat(c.peso)
-              }
-            })
-
-            puntaje = sumaPesos > 0 ? suma / sumaPesos : 0
+            puntaje = calcularPuntajePonderado(criteriosPuntuables, todasLasRespuestas) ?? 0
           } else {
             // Si no hay criterios numéricos, usar el número de votos como puntaje
             puntaje = votosTotales

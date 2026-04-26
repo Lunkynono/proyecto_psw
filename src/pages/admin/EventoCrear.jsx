@@ -8,6 +8,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
+import { subirImagenEvento } from '../../utils/eventImages'
 import Layout from '../../components/layout/Layout'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -17,6 +18,7 @@ export default function EventoCrear() {
   const { user } = useAuthStore()
   const navigate = useNavigate()
   const [guardando, setGuardando] = useState(false)
+  const [imagen, setImagen] = useState(null)
   // Lista de competiciones a crear junto con el evento (al menos una vacía por defecto)
   const [competiciones, setCompeticiones] = useState([{ nombre: '', descripcion: '' }])
 
@@ -45,6 +47,7 @@ export default function EventoCrear() {
     const compValidas = competiciones.filter(c => c.nombre.trim())
     setGuardando(true)
     try {
+      const imagenUrl = imagen ? await subirImagenEvento(supabase, imagen, user.id) : null
       // PASO 1: Inserta el evento y obtiene el ID generado para usarlo en las competiciones
       const { data: evento, error: errEvento } = await supabase
         .from('evento')
@@ -52,6 +55,7 @@ export default function EventoCrear() {
           nombre: data.nombre,
           lugar: data.lugar || null,
           descripcion: data.descripcion || null,
+          imagen_url: imagenUrl,
           organizador_id: user.id  // Vincula el evento al admin autenticado
         })
         .select()
@@ -108,6 +112,22 @@ export default function EventoCrear() {
                 placeholder="Descripción del evento..."
                 {...register('descripcion')}
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Imagen del evento</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={e => setImagen(e.target.files?.[0] || null)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              />
+              {imagen && (
+                <img
+                  src={URL.createObjectURL(imagen)}
+                  alt="Vista previa"
+                  className="mt-3 h-36 w-full rounded-lg object-cover border border-gray-200"
+                />
+              )}
             </div>
           </div>
 

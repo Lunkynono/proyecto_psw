@@ -8,6 +8,7 @@ import { Plus, ChevronRight } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
+import { subirImagenEvento } from '../../utils/eventImages'
 import Layout from '../../components/layout/Layout'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -26,6 +27,7 @@ export default function EventoEditar() {
   const [competiciones, setCompeticiones] = useState([])
   const [cargando, setCargando] = useState(true)
   const [guardando, setGuardando] = useState(false)
+  const [imagen, setImagen] = useState(null)
   const [modalCompeticion, setModalCompeticion] = useState(false)
   // Estado del formulario del modal de nueva competición
   const [nuevaComp, setNuevaComp] = useState({ nombre: '', descripcion: '' })
@@ -53,6 +55,7 @@ export default function EventoEditar() {
       setCompeticiones(comps || [])
       // Rellena el formulario con los datos actuales del evento
       reset({ nombre: ev.nombre, lugar: ev.lugar || '', descripcion: ev.descripcion || '' })
+      setImagen(null)
     } catch (err) {
       toast.error('Error al cargar el evento')
     } finally {
@@ -64,11 +67,14 @@ export default function EventoEditar() {
   const guardarInfo = async (data) => {
     setGuardando(true)
     try {
+      const imagenUrl = imagen ? await subirImagenEvento(supabase, imagen, user.id) : evento?.imagen_url
       const { error } = await supabase
         .from('evento')
-        .update({ nombre: data.nombre, lugar: data.lugar || null, descripcion: data.descripcion || null })
+        .update({ nombre: data.nombre, lugar: data.lugar || null, descripcion: data.descripcion || null, imagen_url: imagenUrl || null })
         .eq('id', id)
       if (error) throw error
+      setEvento(prev => ({ ...prev, nombre: data.nombre, lugar: data.lugar || null, descripcion: data.descripcion || null, imagen_url: imagenUrl || null }))
+      setImagen(null)
       toast.success('Evento actualizado')
     } catch (err) {
       toast.error(err.message)
@@ -153,6 +159,22 @@ export default function EventoEditar() {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Descripción</label>
               <textarea rows={3} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" {...register('descripcion')} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Imagen del evento</label>
+              {(imagen || evento?.imagen_url) && (
+                <img
+                  src={imagen ? URL.createObjectURL(imagen) : evento.imagen_url}
+                  alt={evento?.nombre || 'Evento'}
+                  className="mb-3 h-40 w-full rounded-lg object-cover border border-gray-200"
+                />
+              )}
+              <input
+                type="file"
+                accept="image/*"
+                onChange={e => setImagen(e.target.files?.[0] || null)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              />
             </div>
             <div className="flex justify-end">
               <Button type="submit" loading={guardando}>Guardar cambios</Button>

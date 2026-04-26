@@ -18,6 +18,7 @@ import { VotanteJuezCreator } from '../../factories/creators/VotanteJuezCreator'
 import Layout from '../../components/layout/Layout'
 import Button from '../../components/ui/Button'
 import Spinner from '../../components/ui/Spinner'
+import { RUBRICA_NIVELES, agruparRubrica, ordenarOpciones } from '../../utils/scoring'
 
 // Página de evaluación: permite al juez votar un proyecto concreto dentro de una encuesta
 export default function Votar() {
@@ -38,6 +39,7 @@ export default function Votar() {
   const [enviando, setEnviando] = useState(false)
   // Estado de selecciones para criterios de tipo checklist: { [criterioId]: [opcionId, ...] }
   const [checklistSeleccionados, setChecklistSeleccionados] = useState({})
+  const [rubricaSeleccionada, setRubricaSeleccionada] = useState({})
 
   // Inicializamos react-hook-form para los campos de criterios numéricos, radio y comentario
   const { register, handleSubmit, formState: { errors } } = useForm()
@@ -90,6 +92,17 @@ export default function Votar() {
 
   // Procesa el envío del formulario de votación delegando en la fábrica
   const onSubmit = async (data) => {
+  const rubricaIncompleta = criterios.some(c => {
+    if (c.tipo !== 'rubrica') return false
+    const grupos = agruparRubrica(c.criterio_opcion || [])
+    return grupos.some(g => !rubricaSeleccionada[c.id]?.[g.aspecto])
+  })
+
+  if (rubricaIncompleta) {
+    toast.error('Completa todos los aspectos de la rubrica')
+    return
+  }
+
   setEnviando(true)
 
   try {
@@ -103,7 +116,8 @@ export default function Votar() {
       voterHash,
       criterios,
       data,
-      checklistSeleccionados
+      checklistSeleccionados,
+      rubricaSeleccionada
     })
 
     toast.success('Voto registrado correctamente')
@@ -179,16 +193,60 @@ export default function Votar() {
               {c.tipo === 'radio' && (
                 <div className="space-y-2">
                   {/* Ordenamos las opciones por su campo 'orden' */}
-                  {(c.criterio_opcion || []).sort((a, b) => a.orden - b.orden).map(op => (
+                  {ordenarOpciones(c.criterio_opcion || []).map(op => (
                     <label key={op.id} className="flex items-center gap-2 text-sm cursor-pointer">
                       {/* Registramos el radio en react-hook-form como campo obligatorio */}
-                      <input type="radio" value={op.id} {...register(`criterio_${c.id}`, { required: 'Selecciona una opción' })} />
-                      {op.texto}
+                      <input type="radio" value={op.id} {...register(`criterio_${c.id}`, { required: 'Selecciona una opcion' })} />
+                      <span>{op.texto}</span>
                     </label>
                   ))}
                   {errors[`criterio_${c.id}`] && (
                     <p className="text-red-500 text-xs">{errors[`criterio_${c.id}`].message}</p>
                   )}
+                </div>
+              )}
+
+              {c.tipo === 'rubrica' && (
+                <div className="w-full overflow-x-auto rounded-xl border border-gray-200">
+                  <div className="min-w-[620px]">
+                    <div className="grid grid-cols-[1.25fr_repeat(4,1fr)] bg-gray-50 text-xs font-semibold text-gray-600">
+                      <div className="px-3 py-2">Aspecto</div>
+                      {RUBRICA_NIVELES.map(nivel => (
+                        <div key={nivel.key} className="px-3 py-2 text-center">{nivel.label}</div>
+                      ))}
+                    </div>
+                  {agruparRubrica(c.criterio_opcion || []).map(grupo => (
+                    <div key={grupo.aspecto} className="grid grid-cols-[1.25fr_repeat(4,1fr)] border-t border-gray-100">
+                      <div className="flex items-center px-3 py-3 text-sm font-semibold text-gray-800">{grupo.aspecto}</div>
+                        {RUBRICA_NIVELES.map(nivel => {
+                        const opcion = grupo.opciones.find(op => op.nivel === nivel.key)
+                        const seleccionado = rubricaSeleccionada[c.id]?.[grupo.aspecto] === opcion?.id
+                        return (
+                          <label key={nivel.key} className={`m-1 flex min-h-12 cursor-pointer items-center justify-center rounded-lg border px-2 py-2 text-center text-xs font-semibold transition hover:shadow-sm ${seleccionado ? 'ring-2 ring-indigo-500 ring-offset-1 ' : ''}${nivel.color}`}>
+                            <input
+                              type="radio"
+                              className="sr-only"
+                              checked={seleccionado}
+                              disabled={!opcion}
+                              onChange={() => setRubricaSeleccionada(prev => ({
+                                ...prev,
+                                [c.id]: { ...(prev[c.id] || {}), [grupo.aspecto]: opcion.id }
+                              }))}
+                            />
+                            <span>
+                              <span className="block">{nivel.label}</span>
+                              {opcion?.descriptor && (
+                                <span className="mt-1 block text-[11px] font-normal leading-snug text-gray-600">
+                                  {opcion.descriptor}
+                                </span>
+                              )}
+                            </span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  ))}
+                  </div>
                 </div>
               )}
 
@@ -199,7 +257,7 @@ export default function Votar() {
                   {c.max_selecciones && (
                     <p className="text-xs text-gray-400 mb-1">Máximo {c.max_selecciones} selecciones</p>
                   )}
-                  {(c.criterio_opcion || []).sort((a, b) => a.orden - b.orden).map(op => {
+                  {ordenarOpciones(c.criterio_opcion || []).map(op => {
                     // Selecciones actuales para este criterio
                     const selec = checklistSeleccionados[c.id] || []
                     // Una opción está bloqueada si se alcanzó el máximo y no está ya seleccionada
@@ -214,7 +272,7 @@ export default function Votar() {
                           // Delegamos la lógica de toggle al handler especializado
                           onChange={() => toggleChecklist(c.id, op.id, c.max_selecciones)}
                         />
-                        {op.texto}
+                        <span>{op.texto}</span>
                       </label>
                     )
                   })}

@@ -84,7 +84,7 @@ export default function Acceso() {
     try {
       const { data, error } = await supabase
         .from('evento')
-        .select('id, nombre')
+        .select('id, nombre, imagen_url')
         .order('nombre')
 
       if (error) throw error
@@ -245,6 +245,13 @@ export default function Acceso() {
         maxWidth="max-w-xl"
       >
         <div className="space-y-4">
+          {formParticipante.eventoId && eventos.find(e => String(e.id) === String(formParticipante.eventoId))?.imagen_url && (
+            <img
+              src={eventos.find(e => String(e.id) === String(formParticipante.eventoId)).imagen_url}
+              alt={eventos.find(e => String(e.id) === String(formParticipante.eventoId)).nombre}
+              className="h-36 w-full rounded-lg object-cover border border-gray-200"
+            />
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Evento *

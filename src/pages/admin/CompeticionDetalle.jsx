@@ -12,10 +12,11 @@ import Button from '../../components/ui/Button'
 import Modal from '../../components/ui/Modal'
 import Badge from '../../components/ui/Badge'
 import Spinner from '../../components/ui/Spinner'
+import { RUBRICA_NIVELES, TIPOS_CON_OPCIONES, ajustarPesoOpcion, agruparRubrica, construirOpcionesRubrica, opcionesConTexto, ordenarOpciones, pesosOpcionesValidos, reescalarPesosOpciones } from '../../utils/scoring'
 
 // Etiquetas y colores para los tipos de criterio en los badges
-const TIPO_LABELS = { numerico: 'Numérico', radio: 'Radio', checklist: 'Checklist', comentario: 'Comentario' }
-const TIPO_COLORS = { numerico: 'blue', radio: 'purple', checklist: 'green', comentario: 'yellow' }
+const TIPO_LABELS = { numerico: 'Numerico', radio: 'Radio', checklist: 'Checklist', rubrica: 'Rubrica', comentario: 'Comentario' }
+const TIPO_COLORS = { numerico: 'blue', radio: 'purple', checklist: 'green', rubrica: 'blue', comentario: 'yellow' }
 
 export default function CompeticionDetalle() {
   const { id } = useParams()          // ID de la competición desde la URL
@@ -45,7 +46,8 @@ export default function CompeticionDetalle() {
   const [nuevoCriterio, setNuevoCriterio] = useState({
     titulo: '', descripcion: '', tipo: 'numerico', peso: 1.0,
     rango_min: '', rango_max: '', max_selecciones: '', ilimitado: true,
-    opciones: [{ texto: '' }, { texto: '' }]
+    opciones: [{ texto: '', peso: 0 }, { texto: '', peso: 1 }],
+    rubricaAspectos: [{ texto: 'Calidad tecnica', peso: 0.5, descriptores: {} }, { texto: 'Presentacion', peso: 0.5, descriptores: {} }]
   })
 
   // Estado del formulario del modal de añadir juez
@@ -56,6 +58,7 @@ export default function CompeticionDetalle() {
   const [guardandoEquipo, setGuardandoEquipo] = useState(false)
   const [guardandoCriterio, setGuardandoCriterio] = useState(false)
   const [guardandoJuez, setGuardandoJuez] = useState(false)
+  const [eliminandoEncuesta, setEliminandoEncuesta] = useState(null)
 
   useEffect(() => { cargarDatos() }, [id])
 
@@ -144,6 +147,16 @@ export default function CompeticionDetalle() {
   // Crea un nuevo criterio de evaluación para esta competición
   const guardarCriterio = async () => {
     if (!nuevoCriterio.titulo.trim()) return toast.error('El título es obligatorio')
+    if (nuevoCriterio.tipo === 'rubrica') {
+      const aspectos = nuevoCriterio.rubricaAspectos.filter(a => a.texto.trim())
+      if (aspectos.length === 0) return toast.error('Añade al menos un aspecto a evaluar')
+    } else if (['radio', 'checklist'].includes(nuevoCriterio.tipo)) {
+      const opciones = opcionesConTexto(nuevoCriterio.opciones)
+      if (opciones.length < 2) return toast.error('Añade al menos dos opciones')
+      if (!pesosOpcionesValidos(nuevoCriterio.peso, opciones)) {
+        return toast.error(`La suma de pesos de las opciones debe ser ${nuevoCriterio.peso}`)
+      }
+    }
     setGuardandoCriterio(true)
     try {
       // Construye el payload con los campos comunes
@@ -168,19 +181,29 @@ export default function CompeticionDetalle() {
       const { data: crit, error } = await supabase.from('criterio').insert(payload).select().single()
       if (error) throw error
 
-      // Inserta las opciones para criterios radio y checklist
-      if (['radio', 'checklist'].includes(nuevoCriterio.tipo)) {
-        const opciones = nuevoCriterio.opciones.filter(o => o.texto.trim())
+      // Inserta las opciones para criterios radio, checklist y rubrica
+      if (TIPOS_CON_OPCIONES.includes(nuevoCriterio.tipo)) {
+        const opciones = nuevoCriterio.tipo === 'rubrica'
+          ? construirOpcionesRubrica(nuevoCriterio.rubricaAspectos, nuevoCriterio.peso)
+          : opcionesConTexto(nuevoCriterio.opciones)
         if (opciones.length > 0) {
           const { error: e2 } = await supabase.from('criterio_opcion').insert(
-            opciones.map((o, i) => ({ criterio_id: crit.id, texto: o.texto.trim(), orden: i }))
+            opciones.map((o, i) => ({
+              criterio_id: crit.id,
+              texto: o.texto.trim(),
+              aspecto: o.aspecto || null,
+              nivel: o.nivel || null,
+              descriptor: o.descriptor || null,
+              peso: o.peso !== '' ? parseFloat(o.peso) || 0 : 0,
+              orden: o.orden ?? i
+            }))
           )
           if (e2) throw e2
         }
       }
 
       await cargarDatos()
-      setNuevoCriterio({ titulo: '', descripcion: '', tipo: 'numerico', peso: 1.0, rango_min: '', rango_max: '', max_selecciones: '', ilimitado: true, opciones: [{ texto: '' }, { texto: '' }] })
+      setNuevoCriterio({ titulo: '', descripcion: '', tipo: 'numerico', peso: 1.0, rango_min: '', rango_max: '', max_selecciones: '', ilimitado: true, opciones: [{ texto: '', peso: 0 }, { texto: '', peso: 1 }], rubricaAspectos: [{ texto: 'Calidad tecnica', peso: 0.5, descriptores: {} }, { texto: 'Presentacion', peso: 0.5, descriptores: {} }] })
       setModalCriterio(false)
       toast.success('Criterio añadido')
     } catch (err) {
@@ -284,16 +307,118 @@ export default function CompeticionDetalle() {
     }
   }
 
-  // Elimina un criterio de evaluación por su ID
-  const eliminarCriterio = async (critId) => {
+    // Elimina un criterio de evaluación por su ID
+  // Elimina una encuesta cerrada y todos sus datos asociados
+  const eliminarEncuestaCerrada = async (encuesta) => {
+    if (encuesta.estado !== 'cerrada') {
+      toast.error('Solo se pueden eliminar encuestas cerradas')
+      return
+    }
+
+    const confirmado = window.confirm(`Se eliminara la encuesta "${encuesta.nombre}" y todos sus votos. Esta accion no se puede deshacer.`)
+    if (!confirmado) return
+
+    setEliminandoEncuesta(encuesta.id)
     try {
-      const { error } = await supabase.from('criterio').delete().eq('id', critId)
-      if (error) throw error
-      setCriterios(criterios.filter(c => c.id !== critId))
+      const { data: votosJuez, error: errVotosJuez } = await supabase
+        .from('voto')
+        .select('id')
+        .eq('encuesta_id', encuesta.id)
+      if (errVotosJuez) throw errVotosJuez
+
+      const idsVotosJuez = (votosJuez || []).map(v => v.id)
+      if (idsVotosJuez.length > 0) {
+        const { error } = await supabase
+          .from('respuesta_criterio')
+          .delete()
+          .in('voto_id', idsVotosJuez)
+        if (error) throw error
+      }
+
+      const { data: votosPublico, error: errVotosPublico } = await supabase
+        .from('voto_publico')
+        .select('id')
+        .eq('encuesta_id', encuesta.id)
+      if (errVotosPublico) throw errVotosPublico
+
+      const idsVotosPublico = (votosPublico || []).map(v => v.id)
+      if (idsVotosPublico.length > 0) {
+        const { error } = await supabase
+          .from('respuesta_criterio_publico')
+          .delete()
+          .in('voto_publico_id', idsVotosPublico)
+        if (error) throw error
+      }
+
+      const borrados = await Promise.all([
+        supabase.from('voto').delete().eq('encuesta_id', encuesta.id),
+        supabase.from('voto_publico').delete().eq('encuesta_id', encuesta.id),
+        supabase.from('publico_registro').delete().eq('encuesta_id', encuesta.id),
+        supabase.from('resultado').delete().eq('encuesta_id', encuesta.id),
+        supabase.from('encuesta_juez').delete().eq('encuesta_id', encuesta.id),
+        supabase.from('encuesta_criterio').delete().eq('encuesta_id', encuesta.id)
+      ])
+
+      const fallo = borrados.find(r => r.error)
+      if (fallo) throw fallo.error
+
+      const { error: errEncuesta } = await supabase
+        .from('encuesta')
+        .delete()
+        .eq('id', encuesta.id)
+      if (errEncuesta) throw errEncuesta
+
+      setEncuestas(prev => prev.filter(e => e.id !== encuesta.id))
+      toast.success('Encuesta eliminada')
     } catch (err) {
-      toast.error(err.message)
+      toast.error(err.message || 'Error al eliminar encuesta')
+    } finally {
+      setEliminandoEncuesta(null)
     }
   }
+
+  const eliminarCriterio = async (critId) => {
+  try {
+    // 1. Comprobar si tiene respuestas de jurado
+    const { count: countJuez, error: e1 } = await supabase
+      .from('respuesta_criterio')
+      .select('*', { count: 'exact', head: true })
+      .eq('criterio_id', critId)
+
+    if (e1) throw e1
+
+    // 2. Comprobar si tiene respuestas del público
+    const { count: countPublico, error: e2 } = await supabase
+      .from('respuesta_criterio_publico')
+      .select('*', { count: 'exact', head: true })
+      .eq('criterio_id', critId)
+
+    if (e2) throw e2
+
+    // 3. Si se está usando → no borrar
+    if ((countJuez || 0) > 0 || (countPublico || 0) > 0) {
+      toast.error('No se puede eliminar el criterio porque ya tiene votos asociados')
+      return
+    }
+
+    // 4. Borrar relaciones (por si acaso)
+    await supabase.from('encuesta_criterio').delete().eq('criterio_id', critId)
+    await supabase.from('criterio_opcion').delete().eq('criterio_id', critId)
+
+    // 5. Borrar criterio
+    const { error } = await supabase
+      .from('criterio')
+      .delete()
+      .eq('id', critId)
+
+    if (error) throw error
+
+    setCriterios(prev => prev.filter(c => c.id !== critId))
+    toast.success('Criterio eliminado')
+  } catch (err) {
+    toast.error(err.message || 'Error al eliminar criterio')
+  }
+}
 
   if (cargando) return <Layout><div className="flex justify-center py-12"><Spinner /></div></Layout>
 
@@ -362,10 +487,18 @@ export default function CompeticionDetalle() {
                     <p className="text-xs text-gray-400 mt-1">Rango: {c.rango_min ?? '—'} – {c.rango_max ?? '—'}</p>
                   )}
                   {/* Opciones para criterios radio/checklist */}
-                  {['radio', 'checklist'].includes(c.tipo) && c.criterio_opcion?.length > 0 && (
-                    <p className="text-xs text-gray-400 mt-1">
-                      {c.criterio_opcion.map(o => o.texto).join(' / ')}
-                    </p>
+                  {TIPOS_CON_OPCIONES.includes(c.tipo) && c.criterio_opcion?.length > 0 && (
+                    <div className="text-xs text-gray-400 mt-1 space-y-0.5">
+                      {c.tipo === 'rubrica'
+                        ? agruparRubrica(c.criterio_opcion).map(g => (
+                            <p key={g.aspecto}>{g.aspecto}</p>
+                          ))
+                        : ordenarOpciones(c.criterio_opcion).map(o => (
+                            <p key={o.id}>
+                              {o.texto} ({o.peso ?? 0})
+                            </p>
+                          ))}
+                    </div>
                   )}
                 </div>
                 <button onClick={() => eliminarCriterio(c.id)} className="text-red-400 hover:text-red-600 ml-3">
@@ -402,10 +535,23 @@ export default function CompeticionDetalle() {
                     {e.codigo_sala && <Badge color="purple">Sala: {e.codigo_sala}</Badge>}
                   </div>
                 </div>
-                {/* Link a los resultados de la encuesta */}
-                <Link to={`/admin/encuestas/${e.id}/resultados`} className="text-sm text-indigo-600 hover:underline">
-                  Detalles
-                </Link>
+                <div className="flex items-center gap-3">
+                  {/* Link a los resultados de la encuesta */}
+                  <Link to={`/admin/encuestas/${e.id}/resultados`} className="text-sm text-indigo-600 hover:underline">
+                    Detalles
+                  </Link>
+                  {e.estado === 'cerrada' && (
+                    <button
+                      type="button"
+                      onClick={() => eliminarEncuestaCerrada(e)}
+                      disabled={eliminandoEncuesta === e.id}
+                      className="text-red-400 hover:text-red-600 disabled:opacity-50"
+                      title="Eliminar encuesta cerrada"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -493,7 +639,7 @@ export default function CompeticionDetalle() {
       </Modal>
 
       {/* MODAL: AÑADIR CRITERIO */}
-      <Modal open={modalCriterio} onClose={() => setModalCriterio(false)} title="Añadir criterio" maxWidth="max-w-lg">
+      <Modal open={modalCriterio} onClose={() => setModalCriterio(false)} title="Añadir criterio" maxWidth="max-w-xl">
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Título *</label>
@@ -508,18 +654,19 @@ export default function CompeticionDetalle() {
           <div className="flex gap-3">
             <div className="flex-1">
               <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
-              <select value={nuevoCriterio.tipo} onChange={e => setNuevoCriterio({ ...nuevoCriterio, tipo: e.target.value })}
+              <select value={nuevoCriterio.tipo} onChange={e => setNuevoCriterio({ ...nuevoCriterio, tipo: e.target.value, opciones: reescalarPesosOpciones(nuevoCriterio.opciones, nuevoCriterio.peso), rubricaAspectos: reescalarPesosOpciones(nuevoCriterio.rubricaAspectos, nuevoCriterio.peso) })}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
                 <option value="numerico">Numérico</option>
                 <option value="radio">Radio</option>
                 <option value="checklist">Checklist</option>
+                <option value="rubrica">Rubrica</option>
                 <option value="comentario">Comentario</option>
               </select>
             </div>
             <div className="w-24">
               <label className="block text-sm font-medium text-gray-700 mb-1">Peso</label>
               <input type="number" step="0.1" min="0.1" value={nuevoCriterio.peso}
-                onChange={e => setNuevoCriterio({ ...nuevoCriterio, peso: e.target.value })}
+                onChange={e => setNuevoCriterio({ ...nuevoCriterio, peso: e.target.value, opciones: reescalarPesosOpciones(nuevoCriterio.opciones, e.target.value), rubricaAspectos: reescalarPesosOpciones(nuevoCriterio.rubricaAspectos, e.target.value) })}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
             </div>
           </div>
@@ -538,24 +685,95 @@ export default function CompeticionDetalle() {
               </div>
             </div>
           )}
+          {nuevoCriterio.tipo === 'rubrica' && (
+            <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-sm font-medium text-gray-800">Aspectos de la rubrica</label>
+                <Button type="button" size="sm" variant="secondary" onClick={() => setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: reescalarPesosOpciones([...nuevoCriterio.rubricaAspectos, { texto: '', peso: 0, descriptores: {} }], nuevoCriterio.peso) })}>
+                  <Plus size={13} /> Aspecto
+                </Button>
+              </div>
+              <div className="space-y-2">
+                {nuevoCriterio.rubricaAspectos.map((aspecto, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_6rem_auto_auto] gap-2">
+                    <input value={aspecto.texto} onChange={e => { const aspectos = [...nuevoCriterio.rubricaAspectos]; aspectos[i].texto = e.target.value; setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: aspectos }) }}
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder={`Aspecto ${i + 1}`} />
+                    <input type="number" step="0.1" min="0" max={nuevoCriterio.peso} value={aspecto.peso ?? 0} onChange={e => setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: ajustarPesoOpcion(nuevoCriterio.rubricaAspectos, i, e.target.value, nuevoCriterio.peso) })}
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Peso" />
+                    <button type="button" onClick={() => { const aspectos = [...nuevoCriterio.rubricaAspectos]; aspectos[i] = { ...aspectos[i], descriptoresAbiertos: !aspectos[i].descriptoresAbiertos }; setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: aspectos }) }} className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium text-gray-600 hover:bg-white">
+                      Descriptores
+                    </button>
+                    <button type="button" onClick={() => setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: reescalarPesosOpciones(nuevoCriterio.rubricaAspectos.filter((_, j) => j !== i), nuevoCriterio.peso) })} className={`text-red-400 ${nuevoCriterio.rubricaAspectos.length <= 1 ? 'invisible' : ''}`}>
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 overflow-hidden rounded-lg border border-gray-200 bg-white">
+                <div className="grid grid-cols-[1.2fr_repeat(4,1fr)] bg-gray-50 text-xs font-semibold text-gray-600">
+                  <div className="px-3 py-2">Aspecto</div>
+                  {RUBRICA_NIVELES.map(nivel => (
+                    <div key={nivel.key} className="px-3 py-2 text-center">{nivel.label}</div>
+                  ))}
+                </div>
+                {nuevoCriterio.rubricaAspectos.filter(a => a.texto.trim()).map((aspecto) => (
+                  <div key={aspecto.texto} className="grid grid-cols-[1.2fr_repeat(4,1fr)] border-t border-gray-100 text-xs">
+                    <div className="px-3 py-2 font-medium text-gray-700">{aspecto.texto}</div>
+                    {RUBRICA_NIVELES.map(nivel => {
+                      const aspectoIndex = nuevoCriterio.rubricaAspectos.findIndex(a => a === aspecto)
+                      return (
+                        <div key={nivel.key} className={`m-1 rounded-md border p-2 ${nivel.color}`}>
+                          <div className="text-center font-semibold">
+                            {((Number(aspecto.peso) || 0) * nivel.factor).toFixed(2)}
+                          </div>
+                          {aspecto.descriptoresAbiertos && (
+                            <textarea
+                              rows={2}
+                              value={aspecto.descriptores?.[nivel.key] || ''}
+                              onChange={e => {
+                                const aspectos = [...nuevoCriterio.rubricaAspectos]
+                                aspectos[aspectoIndex] = {
+                                  ...aspectos[aspectoIndex],
+                                  descriptores: {
+                                    ...(aspectos[aspectoIndex].descriptores || {}),
+                                    [nivel.key]: e.target.value
+                                  }
+                                }
+                                setNuevoCriterio({ ...nuevoCriterio, rubricaAspectos: aspectos })
+                              }}
+                              className="mt-1 w-full resize-none rounded border border-white/70 bg-white/70 px-2 py-1 text-[11px] text-gray-700"
+                              placeholder="Opcional"
+                            />
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Opciones de texto para criterios radio y checklist */}
           {['radio', 'checklist'].includes(nuevoCriterio.tipo) && (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium text-gray-700">Opciones</label>
-                <Button type="button" size="sm" variant="secondary" onClick={() => setNuevoCriterio({ ...nuevoCriterio, opciones: [...nuevoCriterio.opciones, { texto: '' }] })}>
+                <label className="text-sm font-medium text-gray-700">
+                  {nuevoCriterio.tipo === 'rubrica' ? 'Niveles de rubrica' : 'Opciones'}
+                </label>
+                <Button type="button" size="sm" variant="secondary" onClick={() => setNuevoCriterio({ ...nuevoCriterio, opciones: [...nuevoCriterio.opciones, { texto: '', peso: 0 }] })}>
                   <Plus size={13} /> Opción
                 </Button>
               </div>
               {nuevoCriterio.opciones.map((op, i) => (
-                <div key={i} className="flex gap-2 mb-2">
+                <div key={i} className="grid grid-cols-[1fr_6rem_auto] gap-2 mb-2">
                   <input value={op.texto} onChange={e => { const ops = [...nuevoCriterio.opciones]; ops[i].texto = e.target.value; setNuevoCriterio({ ...nuevoCriterio, opciones: ops }) }}
                     className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder={`Opción ${i + 1}`} />
-                  {nuevoCriterio.opciones.length > 2 && (
-                    <button type="button" onClick={() => setNuevoCriterio({ ...nuevoCriterio, opciones: nuevoCriterio.opciones.filter((_, j) => j !== i) })} className="text-red-400">
-                      <Trash2 size={15} />
-                    </button>
-                  )}
+                  <input type="number" step="0.1" min="0" max={nuevoCriterio.peso} value={op.peso ?? 0} onChange={e => setNuevoCriterio({ ...nuevoCriterio, opciones: ajustarPesoOpcion(nuevoCriterio.opciones, i, e.target.value, nuevoCriterio.peso) })}
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Peso" />
+                  <button type="button" onClick={() => setNuevoCriterio({ ...nuevoCriterio, opciones: reescalarPesosOpciones(nuevoCriterio.opciones.filter((_, j) => j !== i), nuevoCriterio.peso) })} className={`text-red-400 ${nuevoCriterio.opciones.length <= 2 ? 'invisible' : ''}`}>
+                    <Trash2 size={15} />
+                  </button>
                 </div>
               ))}
             </div>

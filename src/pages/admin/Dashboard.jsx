@@ -73,8 +73,12 @@ export default function AdminDashboard() {
             <Link
               key={evento.id}
               to={`/admin/eventos/${evento.id}/editar`}
-              className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow"
+              className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-shadow"
             >
+              {evento.imagen_url && (
+                <img src={evento.imagen_url} alt={evento.nombre} className="h-32 w-full object-cover" />
+              )}
+              <div className="p-5">
               <h2 className="font-semibold text-gray-900 mb-2">{evento.nombre}</h2>
               {/* Lugar del evento (opcional) */}
               {evento.lugar && (
@@ -91,6 +95,7 @@ export default function AdminDashboard() {
               <p className="text-xs text-gray-400 mt-3">
                 {new Date(evento.created_at).toLocaleDateString('es-ES')}
               </p>
+              </div>
             </Link>
           ))}
         </div>

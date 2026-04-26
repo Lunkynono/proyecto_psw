@@ -8,6 +8,7 @@ import { TrendingUp, Users, Wifi } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 // Spinner de carga mientras se obtienen los resultados iniciales
 import Spinner from '../../components/ui/Spinner'
+import { TIPOS_PUNTUABLES, calcularPuntajePonderado } from '../../utils/scoring'
 
 // Página de resultados en tiempo real: muestra el ranking de proyectos actualizado automáticamente
 export default function ResultadosPublico() {
@@ -41,15 +42,16 @@ export default function ResultadosPublico() {
     // Solo los numéricos se usan para calcular puntaje ponderado
     const { data: encCrits } = await supabase
       .from('encuesta_criterio')
-      .select('criterio(id, peso, tipo)')
+      .select('criterio(id, peso, tipo, criterio_opcion(*))')
       .eq('encuesta_id', encuestaId)
 
     // Filtramos solo los criterios de tipo 'numerico' ya que son los que tienen peso
-    const criteriosNum = (encCrits || [])
+    const criteriosPuntuables = (encCrits || [])
       .map(ec => ec.criterio)
-      .filter(c => c?.tipo === 'numerico')
+      .filter(c => TIPOS_PUNTUABLES.includes(c?.tipo))
     // Calculamos la suma total de pesos para normalizar el puntaje final
-    const sumaPesos = criteriosNum.reduce((s, c) => s + parseFloat(c.peso), 0)
+    const sumaPesos = criteriosPuntuables.reduce((s, c) => s + parseFloat(c.peso), 0)
+    const criteriosNum = criteriosPuntuables.filter(c => c.tipo === 'numerico')
 
     // Contar votos y calcular puntajes por proyecto (público + juez)
     // Para cada proyecto calculamos su puntaje ponderado y número total de votos
@@ -68,26 +70,22 @@ export default function ResultadosPublico() {
 
       let puntaje = 0
       // Solo calculamos puntaje ponderado si hay criterios numéricos con peso definido
-      if (criteriosNum.length > 0 && sumaPesos > 0) {
+      if (criteriosPuntuables.length > 0 && sumaPesos > 0) {
         // Consulta 'respuesta_criterio_publico' para obtener las respuestas numéricas del público
         // Usamos join implícito con 'voto_publico' para filtrar por encuesta y proyecto
         const { data: rPub } = await supabase
           .from('respuesta_criterio_publico')
-          .select('criterio_id, valor_numerico, voto_publico!inner(encuesta_id, proyecto_id)')
+          .select('criterio_id, valor_numerico, opciones_ids, voto_publico!inner(encuesta_id, proyecto_id)')
           .eq('voto_publico.encuesta_id', encuestaId)
           .eq('voto_publico.proyecto_id', p.id)
-          // Excluimos las filas donde valor_numerico es NULL
-          .not('valor_numerico', 'is', null)
 
         // Consulta 'respuesta_criterio' para obtener las respuestas numéricas del jurado
         // Usamos join implícito con 'voto' para filtrar por encuesta y proyecto
         const { data: rJuez } = await supabase
           .from('respuesta_criterio')
-          .select('criterio_id, valor_numerico, voto!inner(encuesta_id, proyecto_id)')
+          .select('criterio_id, valor_numerico, opciones_ids, voto!inner(encuesta_id, proyecto_id)')
           .eq('voto.encuesta_id', encuestaId)
           .eq('voto.proyecto_id', p.id)
-          // Excluimos las filas donde valor_numerico es NULL
-          .not('valor_numerico', 'is', null)
 
         // Combinamos todas las respuestas numéricas (público + jurado) en un solo array
         const todasResp = [...(rPub || []), ...(rJuez || [])]
@@ -104,7 +102,7 @@ export default function ResultadosPublico() {
           }
         })
         // Normalizamos dividiendo entre la suma total de pesos para obtener un puntaje en la misma escala
-        puntaje = suma / sumaPesos
+        puntaje = calcularPuntajePonderado(criteriosPuntuables, todasResp) ?? (suma / sumaPesos)
       } else {
         // Sin criterios numéricos: usar conteo de votos como puntaje
         puntaje = votos
