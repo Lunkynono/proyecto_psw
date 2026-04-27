@@ -9,7 +9,6 @@ import { useParams, Link } from 'react-router-dom'
 import { Calculator, Edit2, Check, X, Clock, Pencil } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../../lib/supabase'
-import { useAuthStore } from '../../store/authStore'
 import Layout from '../../components/layout/Layout'
 import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
@@ -20,11 +19,10 @@ import { DATETIME_INPUT_CLASS, datetimeLocalMasMinutos, datetimeLocalToIso, etiq
 import { procesarEncuestasProgramadas } from '../../utils/scheduledSurveys'
 
 
-const TABS = ['Ranking', 'Comentarios']
+const TABS = ['Ranking', 'Comentarios', 'Asignaciones']
 
 export default function Resultados() {
   const { id: encuestaId } = useParams()  // ID de la encuesta desde la URL
-  const { user } = useAuthStore()
   const [encuesta, setEncuesta] = useState(null)
   const [resultados, setResultados] = useState([])   // Ranking calculado de proyectos
   const [comentarios, setComentarios] = useState([])
@@ -38,6 +36,11 @@ export default function Resultados() {
   const [modalAbrir, setModalAbrir] = useState(false)
   const [horaApertura, setHoraApertura] = useState('')
   const [horaCierre, setHoraCierre] = useState('')
+  const [equiposDisponibles, setEquiposDisponibles] = useState([])
+  const [juecesDisponibles, setJuecesDisponibles] = useState([])
+  const [equiposAsignados, setEquiposAsignados] = useState([])
+  const [juecesAsignados, setJuecesAsignados] = useState([])
+  const [guardandoAsignaciones, setGuardandoAsignaciones] = useState(false)
 
   useEffect(() => { cargarDatos() }, [encuestaId])
 
@@ -72,6 +75,17 @@ export default function Resultados() {
       setEncuesta(enc)
       setEstado(enc.estado)
 
+      const [{ data: equiposComp }, { data: juecesComp }, { data: equiposEnc }, { data: juecesEnc }] = await Promise.all([
+        supabase.from('equipo').select('id, nombre, proyecto(id, nombre)').eq('competicion_id', enc.competicion_id),
+        supabase.from('competicion_juez').select('persona_id, persona(nombre, correo)').eq('competicion_id', enc.competicion_id),
+        supabase.from('encuesta_equipo').select('equipo_id').eq('encuesta_id', encuestaId),
+        supabase.from('encuesta_juez').select('persona_id').eq('encuesta_id', encuestaId)
+      ])
+      setEquiposDisponibles(equiposComp || [])
+      setJuecesDisponibles(juecesComp || [])
+      setEquiposAsignados((equiposEnc || []).map(e => e.equipo_id))
+      setJuecesAsignados((juecesEnc || []).map(j => j.persona_id))
+
       // Trae el ranking calculado (tabla 'resultado'), ordenado de mayor a menor puntaje
       const { data: res, error: resError } = await supabase
         .from('resultado')
@@ -105,10 +119,65 @@ export default function Resultados() {
         ...pubFiltrados.map(c => ({ ...c, origen: 'Público', proyecto: c.voto_publico?.proyecto?.nombre })),
         ...juezFiltrados.map(c => ({ ...c, origen: 'Jurado', proyecto: c.voto?.proyecto?.nombre }))
       ])
-    } catch (err) {
+    } catch {
       toast.error('Error al cargar resultados')
     } finally {
       setCargando(false)
+    }
+  }
+
+  const toggleEquipoAsignado = (equipoId) => {
+    setEquiposAsignados(prev => prev.includes(equipoId) ? prev.filter(id => id !== equipoId) : [...prev, equipoId])
+  }
+
+  const toggleJuezAsignado = (personaId) => {
+    setJuecesAsignados(prev => prev.includes(personaId) ? prev.filter(id => id !== personaId) : [...prev, personaId])
+  }
+
+  const asignarTodosEquipos = () => {
+    setEquiposAsignados(equiposDisponibles.map(eq => eq.id))
+  }
+
+  const asignarTodosJueces = () => {
+    setJuecesAsignados(juecesDisponibles.map(j => j.persona_id))
+  }
+
+  const guardarAsignaciones = async () => {
+    if (equiposAsignados.length === 0) return toast.error('La encuesta debe tener al menos un equipo asignado')
+    if (['juez', 'ambos'].includes(encuesta.tipo_votante) && juecesAsignados.length === 0) {
+      return toast.error('La encuesta debe tener al menos un jurado asignado')
+    }
+
+    setGuardandoAsignaciones(true)
+    try {
+      const borrados = await Promise.all([
+        supabase.from('encuesta_equipo').delete().eq('encuesta_id', encuestaId),
+        supabase.from('encuesta_juez').delete().eq('encuesta_id', encuestaId)
+      ])
+      const falloBorrado = borrados.find(r => r.error)
+      if (falloBorrado) throw falloBorrado.error
+
+      const inserciones = []
+      if (equiposAsignados.length > 0) {
+        inserciones.push(supabase.from('encuesta_equipo').insert(
+          equiposAsignados.map(equipo_id => ({ encuesta_id: Number(encuestaId), equipo_id }))
+        ))
+      }
+      if (juecesAsignados.length > 0) {
+        inserciones.push(supabase.from('encuesta_juez').insert(
+          juecesAsignados.map(persona_id => ({ encuesta_id: Number(encuestaId), persona_id }))
+        ))
+      }
+
+      const resultadosInsercion = await Promise.all(inserciones)
+      const falloInsercion = resultadosInsercion.find(r => r.error)
+      if (falloInsercion) throw falloInsercion.error
+
+      toast.success('Asignaciones actualizadas')
+    } catch (err) {
+      toast.error(err.message || 'Error al guardar asignaciones')
+    } finally {
+      setGuardandoAsignaciones(false)
     }
   }
 
@@ -120,13 +189,13 @@ export default function Resultados() {
     try {
 
       const { data: equipos, error: equiposError } = await supabase
-        .from('equipo')
-        .select('proyecto(*)')
-        .eq('competicion_id', encuesta.competicion_id)
+        .from('encuesta_equipo')
+        .select('equipo(proyecto(*))')
+        .eq('encuesta_id', encuestaId)
 
       if (equiposError) throw equiposError
 
-      const proyectos = (equipos || []).flatMap(eq => eq.proyecto || [])
+      const proyectos = (equipos || []).flatMap(eq => eq.equipo?.proyecto || [])
 
       if (proyectos.length === 0) {
         throw new Error('No hay proyectos en esta competición')
@@ -390,7 +459,49 @@ export default function Resultados() {
           </div>
         </div>
 
-        {/* Tabs: Ranking y Comentarios */}
+        {tab === -1 && <div className="bg-white border border-gray-200 rounded-xl p-4 mb-6">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h2 className="font-semibold text-gray-800">Asignaciones</h2>
+              <p className="text-xs text-gray-500">Equipos y jurado incluidos en esta encuesta.</p>
+            </div>
+            <Button size="sm" loading={guardandoAsignaciones} onClick={guardarAsignaciones}>Guardar</Button>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-2">Equipos</p>
+              <div className="space-y-1.5">
+                {equiposDisponibles.map(eq => (
+                  <label key={eq.id} className="flex items-start gap-2 text-sm text-gray-600 cursor-pointer">
+                    <input type="checkbox" className="mt-1" checked={equiposAsignados.includes(eq.id)} onChange={() => toggleEquipoAsignado(eq.id)} />
+                    <span>
+                      {eq.nombre}
+                      {eq.proyecto?.[0]?.nombre && <span className="block text-xs text-gray-400">{eq.proyecto[0].nombre}</span>}
+                    </span>
+                  </label>
+                ))}
+                {equiposDisponibles.length === 0 && <p className="text-sm text-gray-400">No hay equipos en la competición</p>}
+              </div>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-2">Jurado</p>
+              <div className="space-y-1.5">
+                {juecesDisponibles.map(j => (
+                  <label key={j.persona_id} className="flex items-start gap-2 text-sm text-gray-600 cursor-pointer">
+                    <input type="checkbox" className="mt-1" checked={juecesAsignados.includes(j.persona_id)} onChange={() => toggleJuezAsignado(j.persona_id)} />
+                    <span>
+                      {j.persona?.nombre || '(sin nombre)'}
+                      <span className="block text-xs text-gray-400">{j.persona?.correo}</span>
+                    </span>
+                  </label>
+                ))}
+                {juecesDisponibles.length === 0 && <p className="text-sm text-gray-400">No hay jurado asignado a la competición</p>}
+              </div>
+            </div>
+          </div>
+        </div>}
+
+        {/* Tabs: Ranking, Comentarios y Asignaciones */}
         <div className="flex gap-1 border-b border-gray-200 mb-6">
           {TABS.map((t, i) => (
             <button key={t} onClick={() => setTab(i)}
@@ -501,6 +612,76 @@ export default function Resultados() {
             )}
           </div>
         )}
+
+        {tab === 2 && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Asignaciones</h2>
+                <p className="text-sm text-gray-500">Elige que equipos participan y que jurados pueden votar.</p>
+              </div>
+              <Button size="sm" loading={guardandoAsignaciones} onClick={guardarAsignaciones}>Guardar</Button>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <section className="bg-white border border-gray-200 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-semibold text-gray-800">Equipos</h3>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={asignarTodosEquipos} disabled={equiposDisponibles.length === 0}
+                      className="text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:text-gray-300">
+                      Asignar todos
+                    </button>
+                    <Badge color="gray">{equiposAsignados.length}/{equiposDisponibles.length}</Badge>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {equiposDisponibles.map(eq => {
+                    const activo = equiposAsignados.includes(eq.id)
+                    return (
+                      <label key={eq.id} className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${activo ? 'border-indigo-200 bg-indigo-50' : 'border-gray-100 hover:bg-gray-50'}`}>
+                        <input type="checkbox" className="mt-1" checked={activo} onChange={() => toggleEquipoAsignado(eq.id)} />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-gray-800">{eq.nombre}</span>
+                          {eq.proyecto?.[0]?.nombre && <span className="block text-xs text-gray-500 truncate">{eq.proyecto[0].nombre}</span>}
+                        </span>
+                      </label>
+                    )
+                  })}
+                  {equiposDisponibles.length === 0 && <p className="text-sm text-gray-500 py-3">No hay equipos en la competicion</p>}
+                </div>
+              </section>
+
+              <section className="bg-white border border-gray-200 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-semibold text-gray-800">Jurado</h3>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={asignarTodosJueces} disabled={juecesDisponibles.length === 0}
+                      className="text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:text-gray-300">
+                      Asignar todos
+                    </button>
+                    <Badge color="gray">{juecesAsignados.length}/{juecesDisponibles.length}</Badge>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {juecesDisponibles.map(j => {
+                    const activo = juecesAsignados.includes(j.persona_id)
+                    return (
+                      <label key={j.persona_id} className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${activo ? 'border-indigo-200 bg-indigo-50' : 'border-gray-100 hover:bg-gray-50'}`}>
+                        <input type="checkbox" className="mt-1" checked={activo} onChange={() => toggleJuezAsignado(j.persona_id)} />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-gray-800">{j.persona?.nombre || '(sin nombre)'}</span>
+                          <span className="block text-xs text-gray-500 truncate">{j.persona?.correo}</span>
+                        </span>
+                      </label>
+                    )
+                  })}
+                  {juecesDisponibles.length === 0 && <p className="text-sm text-gray-500 py-3">No hay jurado asignado a la competicion</p>}
+                </div>
+              </section>
+            </div>
+          </div>
+        )}
       </div>
 
       <Modal
@@ -581,4 +762,3 @@ export default function Resultados() {
     </Layout>
   )
 }
-

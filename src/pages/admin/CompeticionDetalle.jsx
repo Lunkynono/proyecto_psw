@@ -20,6 +20,12 @@ import { procesarEncuestasProgramadas } from '../../utils/scheduledSurveys'
 const TIPO_LABELS = { numerico: 'Numerico', radio: 'Radio', checklist: 'Checklist', rubrica: 'Rubrica', comentario: 'Comentario' }
 const TIPO_COLORS = { numerico: 'blue', radio: 'purple', checklist: 'green', rubrica: 'blue', comentario: 'yellow' }
 const ORDEN_ESTADO_ENCUESTA = { borrador: 0, programada: 1, abierta: 2, cerrada: 3 }
+const criterioInicial = {
+  titulo: '', descripcion: '', tipo: 'numerico', peso: 1.0,
+  rango_min: '', rango_max: '', max_selecciones: '', ilimitado: true,
+  opciones: [{ texto: '', peso: 0 }, { texto: '', peso: 1 }],
+  rubricaAspectos: [{ texto: 'Calidad tecnica', peso: 0.5, descriptores: {} }, { texto: 'Presentacion', peso: 0.5, descriptores: {} }]
+}
 
 export default function CompeticionDetalle() {
   const { id } = useParams()
@@ -36,22 +42,21 @@ export default function CompeticionDetalle() {
 
   // Control de apertura de modales
   const [modalEquipo, setModalEquipo] = useState(false)
+  const [modalEditarEquipo, setModalEditarEquipo] = useState(false)
   const [modalCriterio, setModalCriterio] = useState(false)
   const [modalJuez, setModalJuez] = useState(false)
+  const [equipoEditando, setEquipoEditando] = useState(null)
+  const [criterioEditando, setCriterioEditando] = useState(null)
+  const [criterioConRespuestas, setCriterioConRespuestas] = useState(false)
 
   // Estado del formulario del modal de nuevo equipo
   const [nuevoEquipo, setNuevoEquipo] = useState({
     nombre: '', proyectoNombre: '', proyectoDesc: '',
-    participantes: [{ nombre: '', correo: '' }]
+    participantes: [{ nombre: '', correo: '', rol: '' }]
   })
 
   // Estado del formulario del modal de nuevo criterio
-  const [nuevoCriterio, setNuevoCriterio] = useState({
-    titulo: '', descripcion: '', tipo: 'numerico', peso: 1.0,
-    rango_min: '', rango_max: '', max_selecciones: '', ilimitado: true,
-    opciones: [{ texto: '', peso: 0 }, { texto: '', peso: 1 }],
-    rubricaAspectos: [{ texto: 'Calidad tecnica', peso: 0.5, descriptores: {} }, { texto: 'Presentacion', peso: 0.5, descriptores: {} }]
-  })
+  const [nuevoCriterio, setNuevoCriterio] = useState(criterioInicial)
 
 
   const [correoJuez, setCorreoJuez] = useState('')
@@ -59,6 +64,7 @@ export default function CompeticionDetalle() {
 
 
   const [guardandoEquipo, setGuardandoEquipo] = useState(false)
+  const [guardandoEdicionEquipo, setGuardandoEdicionEquipo] = useState(false)
   const [guardandoCriterio, setGuardandoCriterio] = useState(false)
   const [guardandoJuez, setGuardandoJuez] = useState(false)
   const [eliminandoEncuesta, setEliminandoEncuesta] = useState(null)
@@ -113,18 +119,104 @@ export default function CompeticionDetalle() {
         .select('persona_id, persona(nombre, correo)')
         .eq('competicion_id', id)
       setJueces(compJueces || [])
-    } catch (err) {
+    } catch {
       toast.error('Error al cargar')
     } finally {
       setCargando(false)
     }
   }
 
+  const validarEquipo = (equipo) => {
+    if (!equipo.nombre.trim() || !equipo.proyectoNombre.trim()) {
+      toast.error('Nombre del equipo y proyecto son obligatorios')
+      return null
+    }
+
+    const parts = equipo.participantes.filter(p => p.nombre.trim() || p.correo.trim() || p.rol?.trim())
+    if (parts.length === 0) {
+      toast.error('Añade al menos un participante')
+      return null
+    }
+    if (parts.some(p => !p.nombre.trim() || !p.correo.trim() || !p.rol?.trim())) {
+      toast.error('Nombre, correo y rol son obligatorios para cada participante')
+      return null
+    }
+
+    return parts
+  }
+
+  const abrirEditarEquipo = (equipo) => {
+    setEquipoEditando({
+      id: equipo.id,
+      nombre: equipo.nombre || '',
+      proyectoId: equipo.proyecto?.[0]?.id || null,
+      proyectoNombre: equipo.proyecto?.[0]?.nombre || '',
+      proyectoDesc: equipo.proyecto?.[0]?.descripcion || '',
+      participantes: (equipo.participante?.length ? equipo.participante : [{ nombre: '', correo: '', rol: '' }])
+        .map(p => ({ id: p.id, nombre: p.nombre || '', correo: p.correo || '', rol: p.rol || '' }))
+    })
+    setModalEditarEquipo(true)
+  }
+
+  const criterioATipoFormulario = (criterio) => {
+    const opcionesOrdenadas = ordenarOpciones(criterio.criterio_opcion || [])
+    const rubricaAspectos = criterio.tipo === 'rubrica'
+      ? agruparRubrica(opcionesOrdenadas).map(g => ({
+          texto: g.aspecto,
+          peso: Math.max(...g.opciones.map(o => Number(o.peso) || 0)),
+          descriptores: g.opciones.reduce((acc, op) => ({ ...acc, [op.nivel]: op.descriptor || '' }), {})
+        }))
+      : criterioInicial.rubricaAspectos
+
+    return {
+      id: criterio.id,
+      titulo: criterio.titulo || '',
+      descripcion: criterio.descripcion || '',
+      tipo: criterio.tipo || 'numerico',
+      peso: criterio.peso ?? 1.0,
+      rango_min: criterio.rango_min ?? '',
+      rango_max: criterio.rango_max ?? '',
+      max_selecciones: criterio.max_selecciones ?? '',
+      ilimitado: criterio.max_selecciones == null,
+      opciones: ['radio', 'checklist'].includes(criterio.tipo)
+        ? (opcionesOrdenadas.length ? opcionesOrdenadas.map(o => ({ id: o.id, texto: o.texto || '', peso: o.peso ?? 0 })) : criterioInicial.opciones)
+        : criterioInicial.opciones,
+      rubricaAspectos
+    }
+  }
+
+  const criterioTieneRespuestas = async (criterioId) => {
+    const [{ count: countJuez, error: e1 }, { count: countPublico, error: e2 }] = await Promise.all([
+      supabase.from('respuesta_criterio').select('*', { count: 'exact', head: true }).eq('criterio_id', criterioId),
+      supabase.from('respuesta_criterio_publico').select('*', { count: 'exact', head: true }).eq('criterio_id', criterioId)
+    ])
+    if (e1) throw e1
+    if (e2) throw e2
+    return (countJuez || 0) > 0 || (countPublico || 0) > 0
+  }
+
+  const abrirCrearCriterio = () => {
+    setCriterioEditando(null)
+    setCriterioConRespuestas(false)
+    setNuevoCriterio(criterioInicial)
+    setModalCriterio(true)
+  }
+
+  const abrirEditarCriterio = async (criterio) => {
+    try {
+      setCriterioEditando(criterio)
+      setNuevoCriterio(criterioATipoFormulario(criterio))
+      setCriterioConRespuestas(await criterioTieneRespuestas(criterio.id))
+      setModalCriterio(true)
+    } catch (err) {
+      toast.error(err.message || 'Error al abrir criterio')
+    }
+  }
+
   // Crea un nuevo equipo con su proyecto y participantes
   const guardarEquipo = async () => {
-    if (!nuevoEquipo.nombre.trim() || !nuevoEquipo.proyectoNombre.trim()) {
-      return toast.error('Nombre del equipo y proyecto son obligatorios')
-    }
+    const parts = validarEquipo(nuevoEquipo)
+    if (!parts) return
     setGuardandoEquipo(true)
     try {
       // PASO 1: Crea el equipo
@@ -142,17 +234,16 @@ export default function CompeticionDetalle() {
       if (e2) throw e2
 
       // PASO 3: Inserta los participantes que tengan nombre y correo
-      const parts = nuevoEquipo.participantes.filter(p => p.nombre.trim() && p.correo.trim())
       if (parts.length > 0) {
         const { error: e3 } = await supabase.from('participante').insert(
-          parts.map(p => ({ equipo_id: eq.id, nombre: p.nombre.trim(), correo: p.correo.trim() }))
+          parts.map(p => ({ equipo_id: eq.id, nombre: p.nombre.trim(), correo: p.correo.trim(), rol: p.rol.trim() }))
         )
         if (e3) throw e3
       }
 
       // Recarga todos los datos para reflejar el nuevo equipo
       await cargarDatos()
-      setNuevoEquipo({ nombre: '', proyectoNombre: '', proyectoDesc: '', participantes: [{ nombre: '', correo: '' }] })
+      setNuevoEquipo({ nombre: '', proyectoNombre: '', proyectoDesc: '', participantes: [{ nombre: '', correo: '', rol: '' }] })
       setModalEquipo(false)
       toast.success('Equipo añadido')
     } catch (err) {
@@ -162,8 +253,120 @@ export default function CompeticionDetalle() {
     }
   }
 
+  const guardarEdicionEquipo = async () => {
+    const parts = validarEquipo(equipoEditando)
+    if (!parts) return
+
+    setGuardandoEdicionEquipo(true)
+    try {
+      const { error: e1 } = await supabase
+        .from('equipo')
+        .update({ nombre: equipoEditando.nombre.trim() })
+        .eq('id', equipoEditando.id)
+      if (e1) throw e1
+
+      if (equipoEditando.proyectoId) {
+        const { error: e2 } = await supabase
+          .from('proyecto')
+          .update({
+            nombre: equipoEditando.proyectoNombre.trim(),
+            descripcion: equipoEditando.proyectoDesc || null
+          })
+          .eq('id', equipoEditando.proyectoId)
+        if (e2) throw e2
+      } else {
+        const { error: e2 } = await supabase.from('proyecto').insert({
+          equipo_id: equipoEditando.id,
+          nombre: equipoEditando.proyectoNombre.trim(),
+          descripcion: equipoEditando.proyectoDesc || null
+        })
+        if (e2) throw e2
+      }
+
+      const { data: actuales, error: actualesError } = await supabase
+        .from('participante')
+        .select('id')
+        .eq('equipo_id', equipoEditando.id)
+      if (actualesError) throw actualesError
+
+      const idsConservados = new Set(parts.filter(p => p.id).map(p => p.id))
+      const idsEliminar = (actuales || []).map(p => p.id).filter(pid => !idsConservados.has(pid))
+      if (idsEliminar.length > 0) {
+        const { error: eDel } = await supabase.from('participante').delete().in('id', idsEliminar)
+        if (eDel) throw eDel
+      }
+
+      const nuevos = parts.filter(p => !p.id)
+      const existentes = parts.filter(p => p.id)
+      const actualizaciones = await Promise.all(existentes.map(p => supabase
+        .from('participante')
+        .update({ nombre: p.nombre.trim(), correo: p.correo.trim(), rol: p.rol.trim() })
+        .eq('id', p.id)
+      ))
+      const fallo = actualizaciones.find(r => r.error)
+      if (fallo) throw fallo.error
+
+      if (nuevos.length > 0) {
+        const { error: eIns } = await supabase.from('participante').insert(
+          nuevos.map(p => ({ equipo_id: equipoEditando.id, nombre: p.nombre.trim(), correo: p.correo.trim(), rol: p.rol.trim() }))
+        )
+        if (eIns) throw eIns
+      }
+
+      await cargarDatos()
+      setModalEditarEquipo(false)
+      setEquipoEditando(null)
+      toast.success('Equipo actualizado')
+    } catch (err) {
+      toast.error(err.message || 'Error al actualizar equipo')
+    } finally {
+      setGuardandoEdicionEquipo(false)
+    }
+  }
+
+  const eliminarEquipo = async () => {
+    if (!equipoEditando) return
+    const ok = window.confirm(`¿Seguro que quieres eliminar "${equipoEditando.nombre}" de la competición? Esta acción no se puede deshacer.`)
+    if (!ok) return
+
+    setGuardandoEdicionEquipo(true)
+    try {
+      const { data: proyectosEquipo, error: proyectosError } = await supabase
+        .from('proyecto')
+        .select('id')
+        .eq('equipo_id', equipoEditando.id)
+      if (proyectosError) throw proyectosError
+
+      const proyectoIds = (proyectosEquipo || []).map(p => p.id)
+      if (proyectoIds.length > 0) {
+        const [{ count: votosJuez }, { count: votosPublico }] = await Promise.all([
+          supabase.from('voto').select('*', { count: 'exact', head: true }).in('proyecto_id', proyectoIds),
+          supabase.from('voto_publico').select('*', { count: 'exact', head: true }).in('proyecto_id', proyectoIds)
+        ])
+        if ((votosJuez || 0) > 0 || (votosPublico || 0) > 0) {
+          toast.error('No se puede eliminar un equipo que ya tiene votos asociados')
+          return
+        }
+      }
+
+      await supabase.from('encuesta_equipo').delete().eq('equipo_id', equipoEditando.id)
+      const { error } = await supabase.from('equipo').delete().eq('id', equipoEditando.id)
+      if (error) throw error
+
+      await cargarDatos()
+      setModalEditarEquipo(false)
+      setEquipoEditando(null)
+      toast.success('Equipo eliminado')
+    } catch (err) {
+      toast.error(err.message || 'Error al eliminar equipo')
+    } finally {
+      setGuardandoEdicionEquipo(false)
+    }
+  }
+
 
   const guardarCriterio = async () => {
+    if (nuevoCriterio.id) return guardarEdicionCriterio()
     if (!nuevoCriterio.titulo.trim()) return toast.error('El título es obligatorio')
     if (nuevoCriterio.tipo === 'rubrica') {
       const aspectos = nuevoCriterio.rubricaAspectos.filter(a => a.texto.trim())
@@ -221,11 +424,87 @@ export default function CompeticionDetalle() {
       }
 
       await cargarDatos()
-      setNuevoCriterio({ titulo: '', descripcion: '', tipo: 'numerico', peso: 1.0, rango_min: '', rango_max: '', max_selecciones: '', ilimitado: true, opciones: [{ texto: '', peso: 0 }, { texto: '', peso: 1 }], rubricaAspectos: [{ texto: 'Calidad tecnica', peso: 0.5, descriptores: {} }, { texto: 'Presentacion', peso: 0.5, descriptores: {} }] })
+      setNuevoCriterio(criterioInicial)
       setModalCriterio(false)
       toast.success('Criterio añadido')
     } catch (err) {
       toast.error(err.message)
+    } finally {
+      setGuardandoCriterio(false)
+    }
+  }
+
+  const guardarEdicionCriterio = async () => {
+    if (!nuevoCriterio.titulo.trim()) return toast.error('El título es obligatorio')
+    const criterioId = criterioEditando?.id || nuevoCriterio.id
+    if (!criterioId) return
+    if (!criterioConRespuestas) {
+      if (nuevoCriterio.tipo === 'rubrica') {
+        const aspectos = nuevoCriterio.rubricaAspectos.filter(a => a.texto.trim())
+        if (aspectos.length === 0) return toast.error('Añade al menos un aspecto a evaluar')
+      } else if (['radio', 'checklist'].includes(nuevoCriterio.tipo)) {
+        const opciones = opcionesConTexto(nuevoCriterio.opciones)
+        if (opciones.length < 2) return toast.error('Añade al menos dos opciones')
+        if (!pesosOpcionesValidos(nuevoCriterio.peso, opciones)) {
+          return toast.error(`La suma de pesos de las opciones debe ser ${nuevoCriterio.peso}`)
+        }
+      }
+    }
+
+    setGuardandoCriterio(true)
+    try {
+      const payload = {
+        titulo: nuevoCriterio.titulo.trim(),
+        descripcion: nuevoCriterio.descripcion || null,
+        peso: parseFloat(nuevoCriterio.peso) || 1.0
+      }
+
+      if (!criterioConRespuestas) {
+        payload.tipo = nuevoCriterio.tipo
+        payload.rango_min = nuevoCriterio.tipo === 'numerico' && nuevoCriterio.rango_min !== '' ? parseFloat(nuevoCriterio.rango_min) : null
+        payload.rango_max = nuevoCriterio.tipo === 'numerico' && nuevoCriterio.rango_max !== '' ? parseFloat(nuevoCriterio.rango_max) : null
+        payload.max_selecciones = nuevoCriterio.tipo === 'checklist'
+          ? (nuevoCriterio.ilimitado ? null : parseInt(nuevoCriterio.max_selecciones) || null)
+          : null
+      }
+
+      const { error } = await supabase.from('criterio').update(payload).eq('id', criterioId)
+      if (error) throw error
+
+      if (!criterioConRespuestas) {
+        const { error: eDel } = await supabase.from('criterio_opcion').delete().eq('criterio_id', criterioId)
+        if (eDel) throw eDel
+
+        if (TIPOS_CON_OPCIONES.includes(nuevoCriterio.tipo)) {
+          const opciones = nuevoCriterio.tipo === 'rubrica'
+            ? construirOpcionesRubrica(nuevoCriterio.rubricaAspectos, nuevoCriterio.peso)
+            : opcionesConTexto(nuevoCriterio.opciones)
+
+          if (opciones.length > 0) {
+            const { error: eIns } = await supabase.from('criterio_opcion').insert(
+              opciones.map((o, i) => ({
+                criterio_id: criterioId,
+                texto: o.texto.trim(),
+                aspecto: o.aspecto || null,
+                nivel: o.nivel || null,
+                descriptor: o.descriptor || null,
+                peso: o.peso !== '' ? parseFloat(o.peso) || 0 : 0,
+                orden: o.orden ?? i
+              }))
+            )
+            if (eIns) throw eIns
+          }
+        }
+      }
+
+      await cargarDatos()
+      setNuevoCriterio(criterioInicial)
+      setCriterioEditando(null)
+      setCriterioConRespuestas(false)
+      setModalCriterio(false)
+      toast.success('Criterio actualizado')
+    } catch (err) {
+      toast.error(err.message || 'Error al actualizar criterio')
     } finally {
       setGuardandoCriterio(false)
     }
@@ -374,6 +653,7 @@ export default function CompeticionDetalle() {
         supabase.from('publico_registro').delete().eq('encuesta_id', encuesta.id),
         supabase.from('resultado').delete().eq('encuesta_id', encuesta.id),
         supabase.from('encuesta_juez').delete().eq('encuesta_id', encuesta.id),
+        supabase.from('encuesta_equipo').delete().eq('encuesta_id', encuesta.id),
         supabase.from('encuesta_criterio').delete().eq('encuesta_id', encuesta.id)
       ])
 
@@ -520,7 +800,8 @@ export default function CompeticionDetalle() {
           {/* Grid de tarjetas de equipos */}
           <div className="grid gap-3 sm:grid-cols-2">
             {equipos.map(eq => (
-              <div key={eq.id} className="bg-white border border-gray-200 rounded-xl p-4">
+              <button key={eq.id} type="button" onClick={() => abrirEditarEquipo(eq)}
+                className="bg-white border border-gray-200 rounded-xl p-4 text-left hover:border-indigo-200 hover:bg-indigo-50/30 transition-colors">
                 <p className="font-semibold text-gray-800">{eq.nombre}</p>
                 {/* Nombre del primer proyecto del equipo (normalmente solo hay uno) */}
                 {eq.proyecto?.[0] && (
@@ -529,10 +810,12 @@ export default function CompeticionDetalle() {
                 {/* Lista de participantes del equipo */}
                 <div className="mt-2 space-y-0.5">
                   {eq.participante?.map(p => (
-                    <p key={p.id} className="text-xs text-gray-500">{p.nombre} - {p.correo}</p>
+                    <p key={p.id} className="text-xs text-gray-500">
+                      {p.nombre} - {p.correo}{p.rol ? ` - ${p.rol}` : ''}
+                    </p>
                   ))}
                 </div>
-              </div>
+              </button>
             ))}
           </div>
           {equipos.length === 0 && <p className="text-sm text-gray-500 py-4">No hay equipos aún</p>}
@@ -542,13 +825,13 @@ export default function CompeticionDetalle() {
         <section className="mt-8">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold text-gray-900">Criterios</h2>
-            <Button size="sm" onClick={() => setModalCriterio(true)}>
+            <Button size="sm" onClick={abrirCrearCriterio}>
               <Plus size={14} /> Añadir criterio
             </Button>
           </div>
           <div className="space-y-2">
             {criterios.map(c => (
-              <div key={c.id} className="bg-white border border-gray-200 rounded-xl p-4 flex items-start justify-between">
+              <div key={c.id} role="button" tabIndex={0} onClick={() => abrirEditarCriterio(c)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') abrirEditarCriterio(c) }} className="w-full bg-white border border-gray-200 rounded-xl p-4 flex items-start justify-between text-left hover:border-indigo-200 hover:bg-indigo-50/30 transition-colors cursor-pointer">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <span className="font-medium text-gray-800">{c.titulo}</span>
@@ -574,7 +857,7 @@ export default function CompeticionDetalle() {
                     </div>
                   )}
                 </div>
-                <button onClick={() => eliminarCriterio(c.id)} className="text-red-400 hover:text-red-600 ml-3">
+                <button type="button" onClick={(e) => { e.stopPropagation(); eliminarCriterio(c.id) }} className="text-red-400 hover:text-red-600 ml-3">
                   <Trash2 size={15} />
                 </button>
               </div>
@@ -699,21 +982,23 @@ export default function CompeticionDetalle() {
           </div>
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-sm font-medium text-gray-700">Participantes</label>
+              <label className="text-sm font-medium text-gray-700">Participantes *</label>
 
-              <Button type="button" size="sm" variant="secondary" onClick={() => setNuevoEquipo({ ...nuevoEquipo, participantes: [...nuevoEquipo.participantes, { nombre: '', correo: '' }] })}>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setNuevoEquipo({ ...nuevoEquipo, participantes: [...nuevoEquipo.participantes, { nombre: '', correo: '', rol: '' }] })}>
                 <Plus size={13} /> Añadir
               </Button>
             </div>
             {nuevoEquipo.participantes.map((p, i) => (
-              <div key={i} className="flex gap-2 mb-2">
+              <div key={i} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto] gap-2 mb-2">
                 <input value={p.nombre} onChange={e => { const ps = [...nuevoEquipo.participantes]; ps[i].nombre = e.target.value; setNuevoEquipo({ ...nuevoEquipo, participantes: ps }) }}
-                  className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Nombre" />
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Nombre *" />
                 <input value={p.correo} onChange={e => { const ps = [...nuevoEquipo.participantes]; ps[i].correo = e.target.value; setNuevoEquipo({ ...nuevoEquipo, participantes: ps }) }}
-                  className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Correo" />
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Correo *" />
+                <input value={p.rol || ''} onChange={e => { const ps = [...nuevoEquipo.participantes]; ps[i].rol = e.target.value; setNuevoEquipo({ ...nuevoEquipo, participantes: ps }) }}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Rol *" />
 
                 {nuevoEquipo.participantes.length > 1 && (
-                  <button type="button" onClick={() => setNuevoEquipo({ ...nuevoEquipo, participantes: nuevoEquipo.participantes.filter((_, j) => j !== i) })} className="text-red-400">
+                  <button type="button" onClick={() => setNuevoEquipo({ ...nuevoEquipo, participantes: nuevoEquipo.participantes.filter((_, j) => j !== i) })} className="text-red-400 sm:self-center">
                     <Trash2 size={15} />
                   </button>
                 )}
@@ -728,8 +1013,65 @@ export default function CompeticionDetalle() {
       </Modal>
 
 
-      <Modal open={modalCriterio} onClose={() => setModalCriterio(false)} title="Añadir criterio" maxWidth="max-w-xl">
+      <Modal open={modalEditarEquipo} onClose={() => { setModalEditarEquipo(false); setEquipoEditando(null) }} title="Editar equipo" maxWidth="max-w-xl">
+        {equipoEditando && (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Nombre del equipo *</label>
+              <input value={equipoEditando.nombre} onChange={e => setEquipoEditando({ ...equipoEditando, nombre: e.target.value })}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Nombre del proyecto *</label>
+              <input value={equipoEditando.proyectoNombre} onChange={e => setEquipoEditando({ ...equipoEditando, proyectoNombre: e.target.value })}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Descripción del proyecto</label>
+              <textarea rows={2} value={equipoEditando.proyectoDesc} onChange={e => setEquipoEditando({ ...equipoEditando, proyectoDesc: e.target.value })}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-gray-700">Participantes *</label>
+                <Button type="button" size="sm" variant="secondary" onClick={() => setEquipoEditando({ ...equipoEditando, participantes: [...equipoEditando.participantes, { nombre: '', correo: '', rol: '' }] })}>
+                  <Plus size={13} /> Añadir
+                </Button>
+              </div>
+              {equipoEditando.participantes.map((p, i) => (
+                <div key={p.id || i} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto] gap-2 mb-2">
+                  <input value={p.nombre} onChange={e => { const ps = [...equipoEditando.participantes]; ps[i].nombre = e.target.value; setEquipoEditando({ ...equipoEditando, participantes: ps }) }}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Nombre *" />
+                  <input value={p.correo} onChange={e => { const ps = [...equipoEditando.participantes]; ps[i].correo = e.target.value; setEquipoEditando({ ...equipoEditando, participantes: ps }) }}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Correo *" />
+                  <input value={p.rol || ''} onChange={e => { const ps = [...equipoEditando.participantes]; ps[i].rol = e.target.value; setEquipoEditando({ ...equipoEditando, participantes: ps }) }}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Rol *" />
+                  {equipoEditando.participantes.length > 1 && (
+                    <button type="button" onClick={() => setEquipoEditando({ ...equipoEditando, participantes: equipoEditando.participantes.filter((_, j) => j !== i) })} className="text-red-400 sm:self-center">
+                      <Trash2 size={15} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-between gap-2">
+              <Button variant="danger" loading={guardandoEdicionEquipo} onClick={eliminarEquipo}>Eliminar equipo</Button>
+              <div className="flex gap-2">
+                <Button variant="secondary" onClick={() => { setModalEditarEquipo(false); setEquipoEditando(null) }}>Cancelar</Button>
+                <Button loading={guardandoEdicionEquipo} onClick={guardarEdicionEquipo}>Guardar cambios</Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={modalCriterio} onClose={() => { setModalCriterio(false); setCriterioEditando(null); setCriterioConRespuestas(false); setNuevoCriterio(criterioInicial) }} title={criterioEditando ? 'Editar criterio' : 'Añadir criterio'} maxWidth="max-w-xl">
         <div className="space-y-4">
+          {criterioEditando && criterioConRespuestas && (
+            <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-3 py-2 text-sm text-yellow-800">
+              Este criterio ya tiene respuestas. Solo se pueden editar título, descripción y peso.
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Título *</label>
             <input value={nuevoCriterio.titulo} onChange={e => setNuevoCriterio({ ...nuevoCriterio, titulo: e.target.value })}
@@ -743,8 +1085,8 @@ export default function CompeticionDetalle() {
           <div className="flex gap-3">
             <div className="flex-1">
               <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
-              <select value={nuevoCriterio.tipo} onChange={e => setNuevoCriterio({ ...nuevoCriterio, tipo: e.target.value, opciones: reescalarPesosOpciones(nuevoCriterio.opciones, nuevoCriterio.peso), rubricaAspectos: reescalarPesosOpciones(nuevoCriterio.rubricaAspectos, nuevoCriterio.peso) })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+              <select value={nuevoCriterio.tipo} disabled={criterioEditando && criterioConRespuestas} onChange={e => setNuevoCriterio({ ...nuevoCriterio, tipo: e.target.value, opciones: reescalarPesosOpciones(nuevoCriterio.opciones, nuevoCriterio.peso), rubricaAspectos: reescalarPesosOpciones(nuevoCriterio.rubricaAspectos, nuevoCriterio.peso) })}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm disabled:bg-gray-100">
                 <option value="numerico">Numérico</option>
                 <option value="radio">Radio</option>
                 <option value="checklist">Checklist</option>
@@ -760,7 +1102,7 @@ export default function CompeticionDetalle() {
             </div>
           </div>
 
-          {nuevoCriterio.tipo === 'numerico' && (
+          {nuevoCriterio.tipo === 'numerico' && !criterioConRespuestas && (
             <div className="flex gap-3">
               <div className="flex-1">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Mín</label>
@@ -774,7 +1116,7 @@ export default function CompeticionDetalle() {
               </div>
             </div>
           )}
-          {nuevoCriterio.tipo === 'rubrica' && (
+          {nuevoCriterio.tipo === 'rubrica' && !criterioConRespuestas && (
             <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
               <div className="flex items-center justify-between mb-3">
                 <label className="text-sm font-medium text-gray-800">Aspectos de la rubrica</label>
@@ -844,7 +1186,7 @@ export default function CompeticionDetalle() {
           )}
 
           {/* Opciones de texto para criterios radio y checklist */}
-          {['radio', 'checklist'].includes(nuevoCriterio.tipo) && (
+          {['radio', 'checklist'].includes(nuevoCriterio.tipo) && !criterioConRespuestas && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-sm font-medium text-gray-700">
@@ -868,7 +1210,7 @@ export default function CompeticionDetalle() {
             </div>
           )}
 
-          {nuevoCriterio.tipo === 'checklist' && (
+          {nuevoCriterio.tipo === 'checklist' && !criterioConRespuestas && (
             <div className="flex items-center gap-3">
               <label className="text-sm text-gray-700">Máx. selecciones:</label>
               <label className="flex items-center gap-1 text-sm">
@@ -882,8 +1224,10 @@ export default function CompeticionDetalle() {
             </div>
           )}
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setModalCriterio(false)}>Cancelar</Button>
-            <Button loading={guardandoCriterio} onClick={guardarCriterio}>Guardar</Button>
+            <Button variant="secondary" onClick={() => { setModalCriterio(false); setCriterioEditando(null); setCriterioConRespuestas(false); setNuevoCriterio(criterioInicial) }}>Cancelar</Button>
+            <Button loading={guardandoCriterio} onClick={nuevoCriterio.id ? guardarEdicionCriterio : guardarCriterio}>
+              {nuevoCriterio.id ? 'Guardar cambios' : 'Guardar'}
+            </Button>
           </div>
         </div>
       </Modal>
@@ -978,4 +1322,3 @@ export default function CompeticionDetalle() {
     </Layout>
   )
 }
-

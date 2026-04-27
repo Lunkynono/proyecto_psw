@@ -59,9 +59,9 @@ export default function JuezDashboard() {
           const [{ data: equipos, error: equiposError }, voterHash] = await Promise.all([
             // Consulta 'equipo' para obtener los proyectos asociados a la competición de esta encuesta
             supabase
-              .from('equipo')
-              .select('proyecto(*)')
-              .eq('competicion_id', enc.competicion_id),
+              .from('encuesta_equipo')
+              .select('equipo(proyecto(*))')
+              .eq('encuesta_id', enc.id),
 
             // Genera el voter_hash = SHA-256(user.id + encuesta.id) para identificar los votos del juez
             generarVoterHash(user.id, enc.id)
@@ -70,7 +70,7 @@ export default function JuezDashboard() {
           if (equiposError) throw equiposError
 
           // Aplanamos el array de equipos para obtener directamente la lista de proyectos
-          const proyectos = (equipos || []).flatMap(eq => eq.proyecto || [])
+          const proyectos = (equipos || []).flatMap(eq => eq.equipo?.proyecto || [])
 
           // Solo los votos de ESTE juez, identificados por su voter_hash
           // Consulta 'voto' filtrando por encuesta y por el voter_hash único del juez

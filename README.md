@@ -394,7 +394,8 @@ CREATE TABLE public.participante (
   id bigserial PRIMARY KEY,
   equipo_id bigint NOT NULL REFERENCES public.equipo(id) ON DELETE CASCADE,
   nombre text NOT NULL,
-  correo text
+  correo text,
+  rol text NOT NULL
 );
 ```
 
@@ -469,6 +470,49 @@ CREATE TABLE public.encuesta_juez (
   persona_id uuid NOT NULL REFERENCES public.persona(id) ON DELETE CASCADE,
   PRIMARY KEY (encuesta_id, persona_id)
 );
+```
+
+### Tabla `encuesta_equipo`
+
+Asigna qué equipos participan en cada encuesta. Al crear una encuesta se incluyen todos los equipos de la competición por defecto, y el administrador puede ajustar la selección desde el detalle de la encuesta.
+
+```sql
+CREATE TABLE public.encuesta_equipo (
+  encuesta_id bigint NOT NULL REFERENCES public.encuesta(id) ON DELETE CASCADE,
+  equipo_id bigint NOT NULL REFERENCES public.equipo(id) ON DELETE CASCADE,
+  PRIMARY KEY (encuesta_id, equipo_id)
+);
+
+ALTER TABLE public.encuesta_equipo ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Ver equipos encuesta anon"
+  ON public.encuesta_equipo FOR SELECT
+  USING (true);
+
+CREATE POLICY "Gestionar equipos encuesta"
+  ON public.encuesta_equipo FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1
+      FROM public.encuesta enc
+      JOIN public.competicion c ON c.id = enc.competicion_id
+      JOIN public.evento e ON e.id = c.evento_id
+      WHERE enc.id = encuesta_equipo.encuesta_id
+        AND e.organizador_id = auth.uid()
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1
+      FROM public.encuesta enc
+      JOIN public.competicion c ON c.id = enc.competicion_id
+      JOIN public.evento e ON e.id = c.evento_id
+      JOIN public.equipo eq ON eq.id = encuesta_equipo.equipo_id
+      WHERE enc.id = encuesta_equipo.encuesta_id
+        AND eq.competicion_id = enc.competicion_id
+        AND e.organizador_id = auth.uid()
+    )
+  );
 ```
 
 ### Tabla `voto`

@@ -3,7 +3,7 @@
 // Cada bloque lleva al login correspondiente (admin y juez comparten /login;
 // participante abre un modal para inscribirse en un evento y competición)
 import { Link } from 'react-router-dom'
-import { useState } from 'react'
+import { createElement, useState } from 'react'
 import { LayoutDashboard, ClipboardList, Users, Plus, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
@@ -63,7 +63,7 @@ const estadoInicialFormulario = {
   nombreEquipo: '',
   proyectoNombre: '',
   proyectoDesc: '',
-  participantes: [{ nombre: '', correo: '' }],
+  participantes: [{ nombre: '', correo: '', rol: '' }],
 }
 
 export default function Acceso() {
@@ -89,7 +89,7 @@ export default function Acceso() {
 
       if (error) throw error
       setEventos(data || [])
-    } catch (err) {
+    } catch {
       toast.error('No se pudieron cargar los eventos')
     } finally {
       setCargandoEventos(false)
@@ -116,7 +116,7 @@ export default function Acceso() {
 
       if (error) throw error
       setCompeticiones(data || [])
-    } catch (err) {
+    } catch {
       toast.error('No se pudieron cargar las competiciones')
     } finally {
       setCargandoCompeticiones(false)
@@ -134,6 +134,18 @@ export default function Acceso() {
 
     if (!formParticipante.nombreEquipo.trim() || !formParticipante.proyectoNombre.trim()) {
       return toast.error('Nombre del equipo y proyecto son obligatorios')
+    }
+
+    const parts = formParticipante.participantes.filter(
+      (p) => p.nombre.trim() || p.correo.trim() || p.rol.trim()
+    )
+
+    if (parts.length === 0) {
+      return toast.error('Añade al menos un participante')
+    }
+
+    if (parts.some((p) => !p.nombre.trim() || !p.correo.trim() || !p.rol.trim())) {
+      return toast.error('Nombre, correo y rol son obligatorios para cada participante')
     }
 
     setGuardando(true)
@@ -159,10 +171,6 @@ export default function Acceso() {
 
       if (e2) throw e2
 
-      const parts = formParticipante.participantes.filter(
-        (p) => p.nombre.trim() && p.correo.trim()
-      )
-
       if (parts.length > 0) {
         const { error: e3 } = await supabase
           .from('participante')
@@ -171,6 +179,7 @@ export default function Acceso() {
               equipo_id: eq.id,
               nombre: p.nombre.trim(),
               correo: p.correo.trim(),
+              rol: p.rol.trim(),
             }))
           )
 
@@ -198,7 +207,7 @@ export default function Acceso() {
 
       {/* Grid de 3 bloques de rol — una columna en móvil, tres en escritorio */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 w-full max-w-3xl">
-        {bloques.map(({ icon: Icon, titulo, descripcion, color, to, action }) => {
+        {bloques.map(({ icon, titulo, descripcion, color, to, action }) => {
           const c = colorMap[color]
           return (
             <div
@@ -207,7 +216,7 @@ export default function Acceso() {
             >
               {/* Icono del rol */}
               <div className={`w-14 h-14 rounded-full flex items-center justify-center mb-4 ${c.icon}`}>
-                <Icon size={26} />
+                {createElement(icon, { size: 26 })}
               </div>
               <h2 className="text-lg font-bold text-gray-900 mb-2">{titulo}</h2>
               <p className="text-sm text-gray-500 mb-6 flex-1">{descripcion}</p>
@@ -356,7 +365,7 @@ export default function Acceso() {
 
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-sm font-medium text-gray-700">Participantes</label>
+              <label className="text-sm font-medium text-gray-700">Participantes *</label>
               <Button
                 type="button"
                 size="sm"
@@ -364,7 +373,7 @@ export default function Acceso() {
                 onClick={() =>
                   setFormParticipante((prev) => ({
                     ...prev,
-                    participantes: [...prev.participantes, { nombre: '', correo: '' }],
+                    participantes: [...prev.participantes, { nombre: '', correo: '', rol: '' }],
                   }))
                 }
               >
@@ -373,7 +382,7 @@ export default function Acceso() {
             </div>
 
             {formParticipante.participantes.map((p, i) => (
-              <div key={i} className="flex gap-2 mb-2">
+              <div key={i} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto] gap-2 mb-2">
                 <input
                   value={p.nombre}
                   onChange={(e) => {
@@ -381,8 +390,8 @@ export default function Acceso() {
                     ps[i].nombre = e.target.value
                     setFormParticipante((prev) => ({ ...prev, participantes: ps }))
                   }}
-                  className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  placeholder="Nombre"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Nombre *"
                 />
                 <input
                   value={p.correo}
@@ -391,8 +400,18 @@ export default function Acceso() {
                     ps[i].correo = e.target.value
                     setFormParticipante((prev) => ({ ...prev, participantes: ps }))
                   }}
-                  className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  placeholder="Correo"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Correo *"
+                />
+                <input
+                  value={p.rol || ''}
+                  onChange={(e) => {
+                    const ps = [...formParticipante.participantes]
+                    ps[i].rol = e.target.value
+                    setFormParticipante((prev) => ({ ...prev, participantes: ps }))
+                  }}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Rol *"
                 />
                 {formParticipante.participantes.length > 1 && (
                   <button
@@ -403,7 +422,7 @@ export default function Acceso() {
                         participantes: prev.participantes.filter((_, j) => j !== i),
                       }))
                     }
-                    className="text-red-400"
+                    className="text-red-400 sm:self-center"
                   >
                     <Trash2 size={15} />
                   </button>

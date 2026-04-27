@@ -28,15 +28,15 @@ export default function ResultadosPublico() {
 
   // Calcula el ranking de proyectos combinando votos del público y del jurado
   // Se memoriza con useCallback para usarlo como dependencia estable en useEffect
-  const calcularRanking = useCallback(async (encuestaId, competicionId) => {
+  const calcularRanking = useCallback(async (encuestaId) => {
     // Consulta la tabla 'equipo' para obtener todos los proyectos de la competición
     const { data: equipos } = await supabase
-      .from('equipo')
-      .select('proyecto(*)')
-      .eq('competicion_id', competicionId)
+      .from('encuesta_equipo')
+      .select('equipo(proyecto(*))')
+      .eq('encuesta_id', encuestaId)
 
     // Aplanamos el array de equipos para obtener directamente la lista de proyectos
-    const proyectos = (equipos || []).flatMap(eq => eq.proyecto || [])
+    const proyectos = (equipos || []).flatMap(eq => eq.equipo?.proyecto || [])
     if (proyectos.length === 0) return []
 
     // Consulta 'encuesta_criterio' para obtener solo los criterios numéricos de esta encuesta
@@ -141,7 +141,7 @@ export default function ResultadosPublico() {
       setEncuesta(enc)
 
       // Calculamos el ranking inicial con los votos existentes
-      const r = await calcularRanking(enc.id, enc.competicion.id)
+      const r = await calcularRanking(enc.id)
       setRanking(r)
       // Calculamos el total de votos sumando los votos de todos los proyectos
       setTotalVotos(r.reduce((s, p) => s + p.votos, 0))
@@ -160,7 +160,7 @@ export default function ResultadosPublico() {
           filter: `encuesta_id=eq.${enc.id}`
         }, async () => {
           // Recalculamos el ranking completo cada vez que llega un nuevo voto público
-          const updated = await calcularRanking(enc.id, enc.competicion.id)
+          const updated = await calcularRanking(enc.id)
           setRanking(updated)
           setTotalVotos(updated.reduce((s, p) => s + p.votos, 0))
         })
@@ -173,7 +173,7 @@ export default function ResultadosPublico() {
           filter: `encuesta_id=eq.${enc.id}`
         }, async () => {
           // Recalculamos el ranking completo cuando un juez emite un nuevo voto
-          const updated = await calcularRanking(enc.id, enc.competicion.id)
+          const updated = await calcularRanking(enc.id)
           setRanking(updated)
           setTotalVotos(updated.reduce((s, p) => s + p.votos, 0))
         })

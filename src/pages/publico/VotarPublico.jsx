@@ -95,20 +95,21 @@ export default function VotarPublico() {
 
       // Consulta la tabla 'equipo' para obtener todos los proyectos de la competición
       const { data: eqs, error: eqError } = await supabase
-        .from('equipo')
+        .from('encuesta_equipo')
         .select(`
-          *,
-          proyecto (*)
+          equipo (
+            proyecto (*)
+          )
         `)
         // Filtramos por la competición asociada a esta encuesta
-        .eq('competicion_id', enc.competicion_id)
+        .eq('encuesta_id', enc.id)
 
       if (eqError) throw eqError
 
       setEncuesta(enc)
 
       // Aplanamos el array de equipos para obtener directamente la lista de proyectos
-      const proyectosCargados = (eqs || []).flatMap(eq => eq.proyecto || [])
+      const proyectosCargados = (eqs || []).flatMap(eq => eq.equipo?.proyecto || [])
       setProyectos(proyectosCargados)
 
       // Extraemos los objetos criterio y eliminamos posibles valores nulos

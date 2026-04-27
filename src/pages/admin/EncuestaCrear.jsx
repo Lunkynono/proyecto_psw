@@ -30,6 +30,10 @@ export default function EncuestaCrear() {
   const [comp, setComp] = useState(null)
   const [criterios, setCriterios] = useState([])          // Criterios disponibles de la competición
   const [proyectos, setProyectos] = useState([])          // Proyectos que se evaluarán (solo para mostrar)
+  const [equipos, setEquipos] = useState([])
+  const [jueces, setJueces] = useState([])
+  const [equiposSeleccionados, setEquiposSeleccionados] = useState([])
+  const [juecesSeleccionados, setJuecesSeleccionados] = useState([])
   const [criteriosSeleccionados, setCriteriosSeleccionados] = useState([])  // IDs de criterios seleccionados
   const [cargando, setCargando] = useState(true)
   const [guardando, setGuardando] = useState(false)
@@ -58,13 +62,14 @@ export default function EncuestaCrear() {
   // Verifica que el usuario es organizador del evento
   async function cargarDatos() {
     try {
-      const [{ data: competicion }, { data: crits }, { data: eqs }] = await Promise.all([
+      const [{ data: competicion }, { data: crits }, { data: eqs }, { data: compJueces }] = await Promise.all([
         // Trae la competición con su evento para verificar acceso
         supabase.from('competicion').select('*, evento(organizador_id, nombre, id)').eq('id', competicionId).single(),
         // Trae los criterios de esta competición con sus opciones
         supabase.from('criterio').select('*, criterio_opcion(*)').eq('competicion_id', competicionId).order('orden'),
         // Trae los equipos con sus proyectos (para mostrar qué proyectos se evaluarán)
-        supabase.from('equipo').select('*, proyecto(*)').eq('competicion_id', competicionId)
+        supabase.from('equipo').select('*, proyecto(*)').eq('competicion_id', competicionId),
+        supabase.from('competicion_juez').select('persona_id, persona(nombre, correo)').eq('competicion_id', competicionId)
       ])
       // Control de acceso
       if (!competicion || competicion.evento.organizador_id !== user.id) {
@@ -73,10 +78,14 @@ export default function EncuestaCrear() {
       }
       setComp(competicion)
       setCriterios(crits || [])
+      setEquipos(eqs || [])
+      setJueces(compJueces || [])
+      setEquiposSeleccionados((eqs || []).map(eq => eq.id))
+      setJuecesSeleccionados((compJueces || []).map(j => j.persona_id))
       // Aplana el array de proyectos: cada equipo puede tener múltiples proyectos
       const prs = (eqs || []).flatMap(eq => eq.proyecto || [])
       setProyectos(prs)
-    } catch (err) {
+    } catch {
       toast.error('Error al cargar')
     } finally {
       setCargando(false)
@@ -88,6 +97,22 @@ export default function EncuestaCrear() {
     setCriteriosSeleccionados(prev =>
       prev.includes(critId) ? prev.filter(x => x !== critId) : [...prev, critId]
     )
+  }
+
+  const toggleEquipo = (equipoId) => {
+    setEquiposSeleccionados(prev => prev.includes(equipoId) ? prev.filter(id => id !== equipoId) : [...prev, equipoId])
+  }
+
+  const toggleJuez = (personaId) => {
+    setJuecesSeleccionados(prev => prev.includes(personaId) ? prev.filter(id => id !== personaId) : [...prev, personaId])
+  }
+
+  const asignarTodosEquipos = () => {
+    setEquiposSeleccionados(equipos.map(eq => eq.id))
+  }
+
+  const asignarTodosJueces = () => {
+    setJuecesSeleccionados(jueces.map(j => j.persona_id))
   }
 
   // Crea un nuevo criterio en la BD y lo añade automáticamente a la selección
@@ -168,6 +193,14 @@ export default function EncuestaCrear() {
       toast.error(errorHorarioSubmit)
       return
     }
+    if (equiposSeleccionados.length === 0) {
+      toast.error('Selecciona al menos un equipo')
+      return
+    }
+    if (['juez', 'ambos'].includes(data.tipo_votante) && juecesSeleccionados.length === 0) {
+      toast.error('Selecciona al menos un jurado')
+      return
+    }
 
     let seleccionados = [...criteriosSeleccionados]
 
@@ -215,6 +248,20 @@ export default function EncuestaCrear() {
         await supabase.from('encuesta_criterio').insert(
           seleccionados.map(cid => ({ encuesta_id: encuesta.id, criterio_id: cid }))
         )
+      }
+
+      if (equiposSeleccionados.length > 0) {
+        const { error: equiposError } = await supabase.from('encuesta_equipo').insert(
+          equiposSeleccionados.map(equipo_id => ({ encuesta_id: encuesta.id, equipo_id }))
+        )
+        if (equiposError) throw equiposError
+      }
+
+      if (juecesSeleccionados.length > 0) {
+        const { error: juecesError } = await supabase.from('encuesta_juez').insert(
+          juecesSeleccionados.map(persona_id => ({ encuesta_id: encuesta.id, persona_id }))
+        )
+        if (juecesError) throw juecesError
       }
 
       toast.success(esBorrador ? 'Borrador guardado' : estadoEncuesta === 'programada' ? 'Encuesta programada' : 'Encuesta abierta')
@@ -326,6 +373,70 @@ export default function EncuestaCrear() {
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <div className="mb-4">
+              <h2 className="font-semibold text-gray-700">Asignaciones</h2>
+              <p className="text-sm text-gray-500">Todos aparecen seleccionados por defecto.</p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-medium text-gray-700">Equipos</p>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={asignarTodosEquipos} disabled={equipos.length === 0}
+                      className="text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:text-gray-300">
+                      Asignar todos
+                    </button>
+                    <Badge color="gray">{equiposSeleccionados.length}/{equipos.length}</Badge>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {equipos.map(eq => {
+                    const activo = equiposSeleccionados.includes(eq.id)
+                    return (
+                      <label key={eq.id} className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${activo ? 'border-indigo-200 bg-indigo-50' : 'border-gray-100 hover:bg-gray-50'}`}>
+                        <input type="checkbox" className="mt-1" checked={activo} onChange={() => toggleEquipo(eq.id)} />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-gray-800">{eq.nombre}</span>
+                          {eq.proyecto?.[0]?.nombre && <span className="block text-xs text-gray-500 truncate">{eq.proyecto[0].nombre}</span>}
+                        </span>
+                      </label>
+                    )
+                  })}
+                  {equipos.length === 0 && <p className="text-sm text-gray-500 py-3">No hay equipos en esta competicion</p>}
+                </div>
+              </section>
+
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-medium text-gray-700">Jurado</p>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={asignarTodosJueces} disabled={jueces.length === 0}
+                      className="text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:text-gray-300">
+                      Asignar todos
+                    </button>
+                    <Badge color="gray">{juecesSeleccionados.length}/{jueces.length}</Badge>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {jueces.map(j => {
+                    const activo = juecesSeleccionados.includes(j.persona_id)
+                    return (
+                      <label key={j.persona_id} className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${activo ? 'border-indigo-200 bg-indigo-50' : 'border-gray-100 hover:bg-gray-50'}`}>
+                        <input type="checkbox" className="mt-1" checked={activo} onChange={() => toggleJuez(j.persona_id)} />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-gray-800">{j.persona?.nombre || '(sin nombre)'}</span>
+                          <span className="block text-xs text-gray-500 truncate">{j.persona?.correo}</span>
+                        </span>
+                      </label>
+                    )
+                  })}
+                  {jueces.length === 0 && <p className="text-sm text-gray-500 py-3">No hay jurado asignado a esta competicion</p>}
+                </div>
+              </section>
+            </div>
           </div>
 
           {/* Lista de proyectos que participarán (informativo, no editable aquí) */}
